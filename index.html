@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Party DJ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+</head>
+<body>
+<main>
+  <header><h1>Party DJ</h1><p id="toast" role="status" aria-live="polite"></p></header>
+
+  <section class="now" aria-label="Now playing">
+    <p class="title" id="title">Nothing playing yet</p>
+    <p class="meta" id="meta">Add songs below to get started</p>
+    <div class="bar" role="progressbar" aria-label="Track position"><i id="fill"></i></div>
+    <div class="times"><span id="elapsed">0:00</span><span id="left">0:00</span></div>
+  </section>
+
+  <div class="padwrap">
+    <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+      <circle class="ring-track" cx="60" cy="60" r="56"/>
+      <circle class="ring-fill" id="ring" cx="60" cy="60" r="56"/>
+    </svg>
+    <button id="pad" class="pad" disabled><span class="grooves"></span><span class="label" id="padlabel">Add songs</span></button>
+  </div>
+  <p class="upnext" id="upnext"></p>
+
+  <fieldset class="blend"><legend>How to blend</legend><div id="blend"></div></fieldset>
+
+  <section class="songs" id="drop">
+    <label class="add"><input id="files" type="file" accept="audio/*" multiple hidden>
+      <strong>Add songs</strong><span>Drop files here or tap to choose</span></label>
+    <ol id="queue"></ol>
+  </section>
+</main>
+<script type="module" src="/src/main.ts"></script>
+</body></html>
