@@ -1,6 +1,8 @@
 [
-  {"id":"house-party","name":"House Party","energyCurve":[0.45,0.65,0.82,0.92,0.75],"transition":"smooth"},
-  {"id":"wedding","name":"Peak Reception","energyCurve":[0.35,0.55,0.85,0.75,0.55],"transition":"bass-swap"},
-  {"id":"pregame","name":"Hype Warmup","energyCurve":[0.60,0.78,0.92,0.95],"transition":"filter"},
-  {"id":"chill-lounge","name":"Late Night Lounge","energyCurve":[0.35,0.45,0.50,0.40],"transition":"long"}
+  {"id":"club-peak","name":"Club Peak 4H","energyCurve":[0.55,0.75,0.92,1.0,0.95,0.85,0.7],"transition":"bass-swap"},
+  {"id":"house-party","name":"House Party","energyCurve":[0.4,0.6,0.8,0.9,0.7],"transition":"smooth"},
+  {"id":"pregame","name":"Pregame","energyCurve":[0.6,0.8,0.9],"transition":"filter"},
+  {"id":"afterhours","name":"Afterhours","energyCurve":[0.82,0.75,0.68,0.6,0.52],"transition":"long"},
+  {"id":"wedding","name":"Wedding","energyCurve":[0.3,0.5,0.8,0.7,0.5],"transition":"long"},
+  {"id":"chill-lounge","name":"Chill Lounge","energyCurve":[0.3,0.4,0.4,0.3],"transition":"long"}
 ]

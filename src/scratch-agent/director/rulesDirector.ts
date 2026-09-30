@@ -29,12 +29,22 @@ const PATTERNS: Record<Style, number[][]> = {
 
 // Per-style primitive templates, cycled in order. [tune]
 const TEMPLATES: Record<Style, PrimitiveName[]> = {
-  sparse: ["stab", "baby", "stab", "cut_forward"],
-  medium: ["stab", "baby", "cut_forward", "stab", "transform"],
-  busy: ["baby", "stab", "cut_forward", "baby", "transform", "stab"],
+  sparse: ["stab", "baby", "chirp", "cut_forward", "tear"],
+  medium: ["stab", "flare", "baby", "cut_forward", "chirp", "transform", "tear"],
+  busy: ["flare", "chirp", "crab", "cut_forward", "transform", "tear", "stab", "baby"],
 };
 
-const LENGTHS: Record<PrimitiveName, number> = { stab: 0.5, baby: 1, cut_forward: 1, transform: 1, rest: 0.5 };
+const LENGTHS: Record<PrimitiveName, number> = {
+  stab: 0.5,
+  baby: 1,
+  cut_forward: 1,
+  transform: 1,
+  flare: 1,
+  chirp: 0.5,
+  tear: 1,
+  crab: 0.5,
+  rest: 0.5,
+};
 
 /**
  * Deterministic baseline director: highest-energy slices in the 80-400 ms range, primitives from a

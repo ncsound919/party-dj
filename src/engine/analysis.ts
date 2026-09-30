@@ -134,11 +134,17 @@ function detectCamelotKey(buf: AudioBuffer): { key: string; keyName: string } {
  * Extracts 3-band RGB waveform envelopes (Low <250Hz, Mid 250Hz-3kHz, High >3kHz),
  * normalized dancefloor energy, and bar-aligned structural cue points.
  */
-function extractWaveformAndCues(
+export function extractWaveformAndCues(
   buf: AudioBuffer,
   bpm: number,
   firstBeat: number
-): { energy: number; cuePoints: CuePoints; waveform: WaveformBands } {
+): {
+  energy: number;
+  rmsDb: number;
+  autoGainDb: number;
+  cuePoints: CuePoints;
+  waveform: WaveformBands;
+} {
   const data = buf.getChannelData(0);
   const sr = buf.sampleRate;
   const duration = data.length / sr;
@@ -213,6 +219,9 @@ function extractWaveformAndCues(
   }
 
   const meanRms = Math.sqrt(totalRmsSq / buckets);
+  const rmsDb = +(20 * Math.log10(Math.max(1e-4, meanRms))).toFixed(2);
+  // Target -11.5 dBFS club RMS, clamped to [-6.0 dB, +6.0 dB] so quiet intros are not over-boosted
+  const autoGainDb = +Math.max(-6, Math.min(6, -11.5 - rmsDb)).toFixed(2);
   const energy = Math.min(1, Math.max(0.15, meanRms * 3.2));
 
   // Bar-aligned cue point detection
@@ -267,6 +276,8 @@ function extractWaveformAndCues(
 
   return {
     energy,
+    rmsDb,
+    autoGainDb,
     cuePoints,
     waveform: { low, mid, high, peaks, energyCurve },
   };
@@ -296,7 +307,7 @@ export function analyze(buf: AudioBuffer): TrackAnalysis {
   const finalBpm = (60 * hz) / P;
   const firstBeat = (((a % P) + P) % P) / hz;
   const { key, keyName } = detectCamelotKey(buf);
-  const { energy, cuePoints, waveform } = extractWaveformAndCues(buf, finalBpm, firstBeat);
+  const { energy, rmsDb, autoGainDb, cuePoints, waveform } = extractWaveformAndCues(buf, finalBpm, firstBeat);
 
   return {
     bpm: finalBpm,
@@ -304,6 +315,8 @@ export function analyze(buf: AudioBuffer): TrackAnalysis {
     key,
     keyName,
     energy,
+    rmsDb,
+    autoGainDb,
     cuePoints,
     waveform,
   };

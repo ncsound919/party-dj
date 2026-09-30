@@ -75,9 +75,9 @@ export function synthesizeStudioTrack(ctx: BaseAudioContext, spec: BuiltInTrackS
   const firstBeat = 0.24;
   const rootFreq = midiToFreq(spec.rootMidi);
 
-  // Minor scale intervals in semitones: 0, 3, 5, 7, 10
-  const bassNotes = [0, 0, 3, 5, 0, 7, 10, 7].map(semi => midiToFreq(spec.rootMidi + semi));
-  const chordSemis = [12, 15, 19, 22]; // Minor 7th chord one octave up
+  // Minor triad & scale intervals in semitones (Root, Minor 3rd, Perfect 5th, Sub-octave, Minor 7th)
+  const bassNotes = [0, 0, 3, 7, 0, 7, 3, 7].map(semi => midiToFreq(spec.rootMidi + semi));
+  const chordSemis = [0, 3, 7, 12, 15, 19]; // Pure Minor Triad across two octaves for true tonal chroma
 
   let noiseSeed = (spec.rootMidi * 1337) >>> 0;
   const nextNoise = () => {
@@ -164,33 +164,40 @@ export function synthesizeStudioTrack(ctx: BaseAudioContext, spec: BuiltInTrackS
         sigR += ch * 0.9;
       }
 
-      // 5. Rolling Off-Beat / Syncopated FM Sub-Bass
+      // 5. Rolling Off-Beat Harmonic Sub-Bass (Fundamental + Octave + 5th overtone)
       if (!isIntro) {
-        const bassGate = beatFrac > 0.22 ? Math.min(1, (beatFrac - 0.22) * 14) * Math.exp(-(beatFrac - 0.22) * 2.6) : 0.15;
-        const mod = Math.sin(2 * Math.PI * bassFreq * 2 * t) * (isDrop ? 1.6 : 0.6) * bassGate;
-        const bass = Math.sin(2 * Math.PI * bassFreq * t + mod) * bassGate * (isDrop ? 0.46 : 0.26);
+        const bassGate =
+          beatFrac > 0.22
+            ? Math.min(1, (beatFrac - 0.22) * 14) * Math.exp(-(beatFrac - 0.22) * 2.4)
+            : 0.22;
+        const fund = Math.sin(2 * Math.PI * bassFreq * t);
+        const oct = Math.sin(2 * Math.PI * bassFreq * 2 * t) * 0.45;
+        const fifth = Math.sin(2 * Math.PI * bassFreq * 1.4983 * t) * 0.22;
+        const bass = (fund + oct + fifth) * bassGate * (isDrop ? 0.38 : 0.24);
         sigL += bass;
         sigR += bass;
       }
 
-      // 6. Harmonic Minor 7th Synth Stabs & Lead Hook (gives key analyzer & scratch engine rich harmonic material)
+      // 6. Harmonic Minor Triad Synth Stabs & Pad (gives key analyzer & scratch engine true tonal pitch-class energy)
       const playStab =
         (isDrop && (beatInBar === 0 || beatFrac >= 0.5)) ||
         isBreakdown ||
         isBuild ||
-        (isIntro && beatInBar === 0);
+        isIntro ||
+        isOutro;
       if (playStab) {
         const stabEnv = isBreakdown
-          ? 0.24 * (0.7 + 0.3 * Math.sin(2 * Math.PI * 2 * beatFrac))
-          : Math.exp(-((beatFrac % 0.5) * 9.5)) * (isDrop ? 0.3 : 0.18);
+          ? 0.3 * (0.75 + 0.25 * Math.sin(2 * Math.PI * 2 * beatFrac))
+          : Math.exp(-((beatFrac % 0.5) * 6.5)) * (isDrop ? 0.34 : 0.22);
         let chordL = 0;
         let chordR = 0;
         for (let c = 0; c < chordSemis.length; c++) {
           const cf = midiToFreq(spec.rootMidi + chordSemis[c]);
+          const weight = c === 0 || c === 3 ? 0.32 : 0.22; // emphasize tonic root
           const v1 = Math.sin(2 * Math.PI * cf * t);
-          const v2 = Math.sin(2 * Math.PI * cf * 1.004 * t + c);
-          chordL += (v1 + 0.4 * v2) * 0.25;
-          chordR += (v2 + 0.4 * v1) * 0.25;
+          const v2 = Math.sin(2 * Math.PI * cf * 1.002 * t + c);
+          chordL += (v1 + 0.35 * v2) * weight;
+          chordR += (v2 + 0.35 * v1) * weight;
         }
         sigL += chordL * stabEnv;
         sigR += chordR * stabEnv;

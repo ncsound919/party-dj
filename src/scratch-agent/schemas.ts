@@ -1,13 +1,36 @@
 // Mirrors PLAN §3. Field names stay snake_case so JSON is interchangeable
 // with the Python pipeline. Ask before changing these: everything depends on them.
 
-export type PrimitiveName = "baby" | "stab" | "cut_forward" | "transform" | "rest";
+export type PrimitiveName =
+  | "baby"
+  | "stab"
+  | "cut_forward"
+  | "transform"
+  | "flare"
+  | "chirp"
+  | "tear"
+  | "crab"
+  | "rest";
 export type Style = "sparse" | "medium" | "busy";
-export const PRIMITIVES: PrimitiveName[] = ["baby", "stab", "cut_forward", "transform", "rest"];
+export const PRIMITIVES: PrimitiveName[] = [
+  "baby",
+  "stab",
+  "cut_forward",
+  "transform",
+  "flare",
+  "chirp",
+  "tear",
+  "crab",
+  "rest",
+];
 export const STYLES: Style[] = ["sparse", "medium", "busy"];
 
+/** Source id used when a slice carries no `src_id` (the primary `src` handed to the pipeline). */
+export const MAIN_SRC = "main";
+
 export interface Slice {
-  id: number;
+  id: number; // unique across every source in a merged bank (see mergeBanks)
+  src_id?: string; // which source buffer the times below index into; undefined = MAIN_SRC
   start: number; // seconds in source
   end: number;
   kind: "word" | "syllable" | "transient";

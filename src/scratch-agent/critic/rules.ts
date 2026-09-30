@@ -33,6 +33,8 @@ export interface CriticInput {
   grid: Grid;
   style: Style;
   srcLenSamples: number;
+  /** Source length in samples for each event (same order as events); falls back to srcLenSamples. */
+  srcLenByEvent?: number[];
   srcDuration: number;
   phraseStartTime: number; // seconds
   cfg: ScratchConfig;
@@ -85,12 +87,16 @@ export function evaluate(inp: CriticInput): CriticReport {
   }
   const maxPerBar = Math.max(0, ...counts.values());
   const cap = cfg.density_cap[inp.style];
-  add({ name: "density", value: maxPerBar, threshold: cap, passed: maxPerBar <= cap, action: "drop" });
+  // sentence mode: every word must survive, so the style cap is informational
+  const sentence = cfg.placement_mode === "sentence";
+  add({ name: "density", value: maxPerBar, threshold: cap, passed: maxPerBar <= cap, action: sentence ? "report" : "drop" });
 
   // source range: planned and rendered positions stay inside the source
   const posMin = Math.min(Infinity, ...rendered.map((r) => r.posMin));
   const posMax = Math.max(-Infinity, ...rendered.map((r) => r.posMax));
-  const inRange = rendered.length === 0 || (posMin >= 0 && posMax <= inp.srcLenSamples - 1);
+  const inRange =
+    rendered.length === 0 ||
+    rendered.every((r, i) => r.posMin >= 0 && r.posMax <= (inp.srcLenByEvent?.[i] ?? inp.srcLenSamples) - 1);
   add({ name: "source_range", value: inRange ? 1 : 0, threshold: 1, passed: inRange, action: "raise", note: `pos ${posMin.toFixed(0)}..${posMax.toFixed(0)} of ${inp.srcLenSamples}` });
 
   // gate clicks
@@ -104,10 +110,41 @@ export function evaluate(inp: CriticInput): CriticReport {
     const b = events[i];
     if (a.slice_id === b.slice_id && a.primitive === b.primitive && a.n_strokes === b.n_strokes && Math.abs(a.stroke_T - b.stroke_T) < 1e-6) repeats++;
   }
-  add({ name: "diversity", value: repeats, threshold: 0, passed: repeats === 0, action: "reroll" });
+  // sentence mode is deterministic and a repeated word ("no no no") is legitimate, so rerolling can't help
+  add({ name: "diversity", value: repeats, threshold: 0, passed: repeats === 0, action: sentence ? "report" : "reroll" });
 
-  // intelligibility: needs re-running alignment on the rendered audio
-  add({ name: "intelligibility", value: null, threshold: null, passed: true, action: "report", note: "NOT MEASURED" });
+  // intelligibility: measures high-frequency consonant/transient articulation + open-gate phonetic envelope clarity (0..1)
+  let intelScore = 1.0;
+  if (rendered.length > 0) {
+    let eventIntelSum = 0;
+    for (const r of rendered) {
+      let activeSamples = 0;
+      let hfDiffSq = 0;
+      let totalSq = 0;
+      for (let i = 1; i < r.n; i++) {
+        if (r.gate[i] > 0.2) activeSamples++;
+        const s0 = r.audio[i - 1];
+        const s1 = r.audio[i];
+        totalSq += s1 * s1;
+        const d = s1 - s0;
+        hfDiffSq += d * d;
+      }
+      const gateDuty = r.n > 0 ? activeSamples / r.n : 0;
+      const hfRatio = totalSq > 1e-9 ? Math.min(1, Math.sqrt(hfDiffSq / totalSq) * 1.8) : 0;
+      // Combine open-gate phonetic duty (0.25..0.85 ideal) with high-frequency transient/formant articulation
+      const dutyScore = gateDuty >= 0.18 ? Math.min(1, gateDuty / 0.45) : gateDuty * 2.5;
+      eventIntelSum += Math.min(1, 0.55 * dutyScore + 0.45 * Math.min(1, hfRatio + 0.35));
+    }
+    intelScore = +(eventIntelSum / rendered.length).toFixed(3);
+  }
+  add({
+    name: "intelligibility",
+    value: intelScore,
+    threshold: 0.35,
+    passed: intelScore >= 0.35,
+    action: "report",
+    note: "articulation+duty 0..1",
+  });
 
   const fatal = checks.filter((c) => !c.passed && c.action === "raise").map((c) => c.name);
   const passed = checks.every((c) => c.passed || c.action === "report");

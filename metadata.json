@@ -1,5 +1,5 @@
 {
   "name": "Party DJ Studio",
-  "description": "Pro-grade web DJ workstation designed for non-DJs, featuring beat-locked smart transitions, Camelot harmonic key matching, 3-band waveform analysis, and sample-accurate bidirectional autoscratching.",
+  "description": "Two-deck browser DJ mixer with beat-grid analysis, Camelot key matching, 3-band isolator EQ, and Kaiser-sinc vinyl scratch synthesis.",
   "requestFramePermissions": []
 }

@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3000",
+    "start": "vite --host 0.0.0.0 --port 3000",
     "build": "tsc && vite build",
-    "typecheck": "tsc --noEmit", "test": "tsx test/analysis.test.ts && tsx test/sync.test.ts"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/analysis.test.ts && tsx test/sync.test.ts && tsx test/sentence.test.ts"
   },
   "devDependencies": {
     "tsx": "^4.23.15",

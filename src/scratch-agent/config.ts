@@ -17,7 +17,7 @@ export interface ScratchConfig {
   ring_off_s: number; // [decided] silent tail after the last stroke
 
   // --- composer (PLAN §7) ---
-  placement_mode: "answer" | "hook"; // [decided]
+  placement_mode: "answer" | "hook" | "sentence"; // [decided] sentence: ordered words, no dropping/shifting
   beats_per_bar: number; // [decided]
   subdiv: number; // [decided] 4 = 16ths; 3/6/12 for triplets
   density_cap: Record<Style, number>; // [tune] events per bar
@@ -30,6 +30,8 @@ export interface ScratchConfig {
   onset_margin_s: number; // [tune] keep attacks this far from a vocal onset (answer mode)
   attack_check_s: number; // [tune] only the first N seconds of an event must avoid onsets
   max_shift_beats: number; // [tune] how far answer mode may move a colliding item
+  sentence_target_rate: number; // [tune] ideal average playback rate per word (1 = natural speed); lengths round UP to the grid, so real rates land at or below this
+  sentence_gap_steps: number; // [tune] empty grid steps between words
 
   // --- critic (PLAN §8) ---
   silence_rms_floor: number; // [tune]
@@ -60,7 +62,17 @@ export const DEFAULT_CONFIG: ScratchConfig = {
   subdiv: 4,
   density_cap: { sparse: 2, medium: 4, busy: 8 },
   fill_intensity: 0.8,
-  micro_offset_ms: { baby: 0, stab: 8, cut_forward: 10, transform: 6, rest: 0 },
+  micro_offset_ms: {
+    baby: 0,
+    stab: 8,
+    cut_forward: 10,
+    transform: 6,
+    flare: 4,
+    chirp: 5,
+    tear: 2,
+    crab: 4,
+    rest: 0,
+  },
   jitter_ms: 3,
   stroke_beats: 0.5,
   transform_duty: 0.5,
@@ -68,6 +80,8 @@ export const DEFAULT_CONFIG: ScratchConfig = {
   onset_margin_s: 0.03,
   attack_check_s: 0.12,
   max_shift_beats: 1,
+  sentence_target_rate: 1,
+  sentence_gap_steps: 0,
 
   silence_rms_floor: 0.002,
   grid_median_err_ms: 20,

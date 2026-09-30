@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>Party DJ Studio</title>
-  <meta name="description" content="Pro-grade web DJ workstation designed for non-DJs, featuring beat-locked smart transitions, Camelot harmonic key matching, 3-band waveform analysis, and sample-accurate bidirectional autoscratching.">
+  <meta name="description" content="Two-deck browser DJ mixer with beat-grid analysis, Camelot key matching, 3-band isolator EQ, and Kaiser-sinc vinyl scratch synthesis.">
   <meta property="og:title" content="Party DJ Studio">
-  <meta property="og:description" content="Pro-grade web DJ workstation designed for non-DJs, featuring beat-locked smart transitions, Camelot harmonic key matching, 3-band waveform analysis, and sample-accurate bidirectional autoscratching.">
+  <meta property="og:description" content="Two-deck browser DJ mixer with beat-grid analysis, Camelot key matching, 3-band isolator EQ, and Kaiser-sinc vinyl scratch synthesis.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -24,9 +24,21 @@
     </nav>
 
     <div class="top-actions">
-      <button type="button" id="autoPilotBtn" class="hw-switch-btn" aria-pressed="false">
+      <button type="button" id="midiConnectBtn" class="hw-switch-btn" aria-pressed="false" title="Connect External Web MIDI DJ Controller (Jog Wheels, Playheads, 3-Band EQ, Crossfader & Pads)">
         <span class="switch-led"></span>
-        <span>Auto-DJ: Off</span>
+        <span id="midiConnectLabel">MIDI: Standby</span>
+      </button>
+      <button type="button" id="micTalkoverBtn" class="hw-switch-btn" aria-pressed="false" title="Live Microphone Talkover (110Hz Vocal High-Pass + -10dB Master Music Ducking)">
+        <span class="switch-led"></span>
+        <span id="micTalkoverLabel">Mic: Off</span>
+      </button>
+      <button type="button" id="recSetBtn" class="hw-switch-btn rec-switch-btn" aria-pressed="false" title="Record Live Master Bus Output to downloadable audio file">
+        <span class="switch-led rec-led"></span>
+        <span id="recSetLabel">Rec Set</span>
+      </button>
+      <button type="button" id="autoPilotBtn" class="hw-switch-btn" aria-pressed="true" title="Automated Phrase Blending, Queue Refill & Smart Transition Selection">
+        <span class="switch-led"></span>
+        <span>Auto-DJ: On</span>
       </button>
       <label class="hw-btn-amber" for="files">
         <span>Load Audio</span>
@@ -57,6 +69,8 @@
             <span id="harmonicReadout" class="mono oled-key-lock">8A to 9A Match</span>
             <span class="oled-divider" aria-hidden="true"></span>
             <span id="beatCountReadout" class="mono oled-bar-counter">Bar 1 / Beat 1</span>
+            <span class="oled-divider" aria-hidden="true"></span>
+            <span id="masterBusReadout" class="mono oled-bar-counter" title="26Hz Subsonic Filter + -1.5dBFS Brickwall Club Limiter + -11.5dBFS RMS Auto-Gain">LIM 0.0dB / AG ON</span>
           </div>
 
           <div class="oled-deck-readout oled-deck-right">
@@ -90,6 +104,7 @@
             <div class="lcd-kicker mono">
               <span class="deck-badge-a">DECK A</span>
               <span id="deckAStatusText">MASTER</span>
+              <button type="button" id="cueListenA" class="btn-pfl mono" title="Pre-Fader Headphone Cue (Routes to Right Channel in Split-Cue Mode)">CUE</button>
             </div>
             <h2 class="lcd-title" id="deckATitle">Midnight Warehouse</h2>
             <p class="lcd-meta mono" id="deckAMeta">124.0 BPM / Key 8A</p>
@@ -136,29 +151,46 @@
           </div>
         </div>
 
+        <!-- Per-Deck Transport, Sync, Beat Jump & Pitch Fader (Deck A) -->
+        <div class="deck-transport-strip">
+          <div class="deck-transport-row">
+            <button type="button" id="deckPlayA" class="hw-key deck-play-btn" title="Play / Pause Deck A independently (Shift+Q)">PLAY A</button>
+            <button type="button" id="deckSyncA" class="hw-key deck-sync-btn" title="Sync Deck A BPM and Beat Phase to Deck B">SYNC</button>
+            <button type="button" class="hw-key beatjump-btn" data-beatjump-deck="0" data-beats="-16" title="Jump Back 4 Bars (-16 Beats)">-4B</button>
+            <button type="button" class="hw-key beatjump-btn" data-beatjump-deck="0" data-beats="-4" title="Jump Back 1 Bar (-4 Beats)">-1B</button>
+            <button type="button" class="hw-key beatjump-btn" data-beatjump-deck="0" data-beats="4" title="Jump Forward 1 Bar (+4 Beats)">+1B</button>
+            <button type="button" class="hw-key beatjump-btn" data-beatjump-deck="0" data-beats="16" title="Jump Forward 4 Bars (+16 Beats)">+4B</button>
+          </div>
+          <label class="deck-pitch-row mono" title="Deck A Pitch / Tempo Fader (-8% to +8%, double-click to reset to 0%)">
+            <span>PITCH</span>
+            <input type="range" id="pitchSliderA" min="-8" max="8" step="0.1" value="0">
+            <span id="pitchValA" class="pitch-readout">0.0%</span>
+          </label>
+        </div>
+
         <!-- 4 Tactile Cue Pads -->
         <div class="pad-bank">
           <div class="bank-label mono">
             <span>HOT CUES</span>
-            <span>BEAT SNAP</span>
+            <span>SHIFT+CLICK SET</span>
           </div>
           <div class="mpc-row-4">
-            <button type="button" class="cue-btn mpc-pad" data-deck="0" data-cue="intro">
+            <button type="button" class="cue-btn mpc-pad" data-deck="0" data-cue="intro" title="Click to jump to INTRO · Shift+Click to set INTRO at current playhead">
               <span class="mpc-led"></span>
               <strong>INTRO</strong>
               <small class="mono" id="cueTimeAIntro">0:01</small>
             </button>
-            <button type="button" class="cue-btn mpc-pad" data-deck="0" data-cue="drop">
+            <button type="button" class="cue-btn mpc-pad" data-deck="0" data-cue="drop" title="Click to jump to DROP · Shift+Click to set DROP at current playhead">
               <span class="mpc-led"></span>
               <strong>DROP</strong>
               <small class="mono" id="cueTimeADrop">0:08</small>
             </button>
-            <button type="button" class="cue-btn mpc-pad" data-deck="0" data-cue="breakdown">
+            <button type="button" class="cue-btn mpc-pad" data-deck="0" data-cue="breakdown" title="Click to jump to BREAK · Shift+Click to set BREAK at current playhead">
               <span class="mpc-led"></span>
               <strong>BREAK</strong>
               <small class="mono" id="cueTimeABreak">0:22</small>
             </button>
-            <button type="button" class="cue-btn mpc-pad" data-deck="0" data-cue="outro">
+            <button type="button" class="cue-btn mpc-pad" data-deck="0" data-cue="outro" title="Click to jump to OUTRO · Shift+Click to set OUTRO at current playhead">
               <span class="mpc-led"></span>
               <strong>OUTRO</strong>
               <small class="mono" id="cueTimeAOutro">0:36</small>
@@ -172,12 +204,14 @@
             <span>AUTO LOOP</span>
             <span id="loopStatusA">OFF</span>
           </div>
-          <div class="loop-key-row">
+          <div class="loop-key-row loop-key-row-7">
+            <button type="button" class="loop-op-btn hw-key" data-deck="0" data-loop-op="halve" title="Halve active loop length (down to 1/8 bar stutter roll)">1/2x</button>
             <button type="button" class="loop-btn hw-key" data-deck="0" data-bars="0.5">1/2</button>
             <button type="button" class="loop-btn hw-key" data-deck="0" data-bars="1">1B</button>
             <button type="button" class="loop-btn hw-key" data-deck="0" data-bars="2">2B</button>
             <button type="button" class="loop-btn hw-key" data-deck="0" data-bars="4">4B</button>
             <button type="button" class="loop-btn hw-key" data-deck="0" data-bars="8">8B</button>
+            <button type="button" class="loop-op-btn hw-key" data-deck="0" data-loop-op="double" title="Double active loop length (up to 16 bars)">2x</button>
           </div>
         </div>
       </article>
@@ -248,9 +282,19 @@
 
             <div class="rocker-bank">
               <div class="rocker-group" role="group" aria-label="Scratch Audio Source">
-                <button type="button" class="seg-btn active" data-scratch-source="cut">VOCAL</button>
-                <button type="button" class="seg-btn" data-scratch-source="slip">SLIP</button>
-                <button type="button" class="seg-btn" data-scratch-source="incoming">DECK B</button>
+                <button type="button" class="seg-btn active" data-scratch-source="vinyl" title="Direct Vinyl Track Mode: Physically grabs, warps, and moves the active music track playhead">VINYL</button>
+                <button type="button" class="seg-btn" data-scratch-source="slip" title="Slip-Mat Active Deck: Warps the active track while underlying beat phase continues">SLIP</button>
+                <button type="button" class="seg-btn" data-scratch-source="incoming" title="Incoming Deck Drop Transient">DECK B</button>
+                <button type="button" class="seg-btn" data-scratch-source="cut" title="90s Battle Record Vocal Cuts (4-Formant + M44-7 Stylus Bite)">VOCAL</button>
+              </div>
+              <div class="rocker-group" role="group" aria-label="Scratch Quantize Grid">
+                <button type="button" class="seg-btn active" data-scratch-quantize="1/16" title="1/16th-Beat Tight Pocket Quantize">1/16</button>
+                <button type="button" class="seg-btn" data-scratch-quantize="1/8" title="1/8th-Beat Club Phrase Quantize">1/8</button>
+                <button type="button" class="seg-btn" data-scratch-quantize="instant" title="Sub-5ms Zero-Latency Battle Pad Trigger">INST</button>
+              </div>
+              <div class="rocker-group" role="group" aria-label="Optical Fader Cut-In">
+                <button type="button" class="seg-btn active" data-scratch-cut="mag-four" title="0.55ms Rane Mag-Four Razor Optical Fader Edge">MAG-4</button>
+                <button type="button" class="seg-btn" data-scratch-cut="smooth" title="1.6ms Classic VCA Crossfader Edge">VCA</button>
               </div>
               <div class="rocker-group" role="group" aria-label="Scratch Intensity">
                 <button type="button" class="seg-btn" data-scratch-intensity="0.75">SOFT</button>
@@ -260,9 +304,34 @@
             </div>
           </div>
 
+          <!-- Track File Modification & 90s Battle Sample Strip -->
+          <div class="battle-sample-strip mono" id="battleSampleRow" aria-label="Track File Modification and Battle Cut Controls">
+            <div class="track-mod-controls">
+              <button type="button" class="seg-btn active" id="commitTrackModBtn" aria-pressed="true" title="When ON, every scratch permanently splices into the loaded music file AudioBuffer and updates the 3-band waveform">MOD TRACK: ON</button>
+              <span class="sample-anchor-readout" id="trackModReadout">0 SPLICES IN TRACK</span>
+              <button type="button" class="btn-micro mono" id="restoreTrackModBtn" disabled title="Restore deck AudioBuffer back to its unmodified original PCM audio">RESTORE ORIG</button>
+              <button type="button" class="btn-micro mono" id="exportModTrackBtn" title="Download the active deck's modified music file as a 16-bit stereo WAV">EXPORT TRACK WAV</button>
+            </div>
+            <div class="rocker-group sample-rocker-group" role="group" aria-label="90s Battle Cut Syllable">
+              <button type="button" class="seg-btn active" data-battle-sample="auto" title="Auto-match optimal syllable timbre to each scratch pattern">AUTO</button>
+              <button type="button" class="seg-btn" data-battle-sample="fresh" title="Classic 'FRESH' Sibilant Cut">FRESH</button>
+              <button type="button" class="seg-btn" data-battle-sample="ahhh" title="Classic 'AHHH' Vocal Vowel Cut">AHHH</button>
+              <button type="button" class="seg-btn" data-battle-sample="cut" title="Crisp 'CUT' Plosive Cut">CUT</button>
+              <button type="button" class="seg-btn" data-battle-sample="scratch" title="'SCRATCH' Sibilant Cut">SCRATCH</button>
+              <button type="button" class="seg-btn" data-battle-sample="drop" title="Punchy 'DROP' Horn Stab">DROP</button>
+            </div>
+            <span class="sample-anchor-readout" id="scratchAnchorBadge">M44-7 · 32-TAP SINC</span>
+          </div>
+
           <!-- 90s Agent Director & Phrase Synthesizer Bar -->
           <div class="agent-control-strip" aria-label="90s Scratch Agent Controls">
             <div class="agent-rockers-row">
+              <div class="rocker-group" role="group" aria-label="90s Turntablist Archetype">
+                <button type="button" class="seg-btn" data-agent-archetype="premier" title="DJ Premier: Semantic Sentence-Hook, forward strokes, sparse + swing">PREMIER</button>
+                <button type="button" class="seg-btn active" data-agent-archetype="philly" title="Philly Transform: High-density rhythmic transforms on rigid 16th grid">PHILLY</button>
+                <button type="button" class="seg-btn" data-agent-archetype="bombsquad" title="Terminator X / Bomb Squad: Multi-bar collage, wide drags and tears">BOMB SQUAD</button>
+              </div>
+
               <div class="rocker-group" role="group" aria-label="Agent Phrase Bars">
                 <button type="button" class="seg-btn active" data-agent-bars="2" title="2-Bar Scratch Phrase">2B</button>
                 <button type="button" class="seg-btn" data-agent-bars="4" title="4-Bar Scratch Phrase">4B</button>
@@ -277,7 +346,17 @@
               <div class="rocker-group" role="group" aria-label="Agent Pocket Placement">
                 <button type="button" class="seg-btn" data-agent-mode="hook" title="Scratch across all beats">HOOK</button>
                 <button type="button" class="seg-btn active" data-agent-mode="answer" title="Leave beats 1-2 open for vocal, scratch answer pocket on beats 3-4">ANSWER</button>
+                <button type="button" class="seg-btn" data-agent-mode="sentence" title="Premier Sentence Mode: Ordered words or slice IDs laid end-to-end on the grid with 1 forward stroke each">SENTENCE</button>
               </div>
+            </div>
+
+            <!-- Sentence Mode Word & Multi-Source Slice Selector (Active in SENTENCE / PREMIER Mode) -->
+            <div class="sentence-input-row" id="sentenceInputRow" hidden>
+              <label class="sentence-box mono" for="sentenceWordsInput">
+                <span>WORDS / IDS</span>
+                <input type="text" id="sentenceWordsInput" value="check fresh cut now" placeholder="Words (check fresh cut now) or slice IDs (0 2 4)">
+              </label>
+              <div class="word-bank-pills mono" id="wordBankPills" aria-label="Available Cut Words"></div>
             </div>
 
             <div class="agent-trigger-row">
@@ -321,50 +400,65 @@
                   <input type="checkbox" id="agentWithHook" checked>
                   <span>Layer Over Track</span>
                 </label>
-                <label class="agent-llm-toggle mono" title="Use OpenAI-compatible local LLM endpoint with automatic fallback to deterministic Rules Director">
-                  <input type="checkbox" id="agentUseLlm">
-                  <span>LLM Director</span>
-                </label>
-                <input type="text" id="agentLlmModel" class="agent-llm-input mono" placeholder="Model (e.g. qwen2.5:7b)" value="" hidden>
                 <button type="button" id="agentExportWavBtn" class="btn-micro mono" disabled>Export Cut WAV</button>
               </div>
             </div>
           </details>
         </div>
 
-        <!-- 3. Machined Crossfader & Collapsible Tone EQ Drawer -->
+        <!-- 3. Machined Crossfader, Channel Faders & Collapsible Tone EQ Drawer -->
         <div class="fader-and-tone-module" id="mixer-rack">
+          <div class="channel-faders-bar mono">
+            <label class="chan-fader-box" title="Deck A Channel Volume Fader">
+              <span>CH A</span>
+              <input type="range" id="chanVolA" min="0" max="1" step="0.01" value="1">
+              <span id="chanVolValA">100%</span>
+            </label>
+
+            <div class="rocker-group cf-curve-group" role="group" aria-label="Crossfader Curve">
+              <button type="button" class="seg-btn active" data-cf-curve="blend" title="Constant-Power Smooth Blend">BLEND</button>
+              <button type="button" class="seg-btn" data-cf-curve="dip" title="Linear Club Center Dip">DIP</button>
+              <button type="button" class="seg-btn" data-cf-curve="cut" title="Fast 12% Turntablist Sharp Cut">CUT</button>
+            </div>
+
+            <label class="chan-fader-box" title="Deck B Channel Volume Fader">
+              <span>CH B</span>
+              <input type="range" id="chanVolB" min="0" max="1" step="0.01" value="1">
+              <span id="chanVolValB">100%</span>
+            </label>
+          </div>
+
           <div class="crossfader-housing">
             <span class="mono cf-end-label">A</span>
             <div class="fader-rail-groove">
-              <input type="range" id="crossfaderInput" class="crossfader-slider" min="-1" max="1" step="0.01" value="-1" aria-label="Master Crossfader">
+              <input type="range" id="crossfaderInput" class="crossfader-slider" min="-1" max="1" step="0.01" value="-1" aria-label="Master Crossfader (Double-click to center)">
             </div>
             <span class="mono cf-end-label">B</span>
           </div>
 
           <details class="tone-drawer">
             <summary class="mono">
-              <span id="cfStatusLabel">3-BAND ISOLATOR EQ &amp; FILTER</span>
+              <span id="cfStatusLabel">3-BAND ISOLATOR EQ, KILL SWITCHES &amp; FILTER</span>
               <span class="drawer-caret">EXPAND</span>
             </summary>
             <div class="eq-columns">
               <div class="eq-channel">
                 <div class="eq-chan-title mono">DECK A</div>
-                <label class="eq-slider-row">
-                  <span class="mono">HI</span>
-                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="0" data-eq-band="high">
+                <div class="eq-slider-row">
+                  <button type="button" class="eq-kill-btn mono" data-kill-deck="0" data-kill-band="high" title="Kill Deck A High Band (-48dB)">HI</button>
+                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="0" data-eq-band="high" aria-label="Deck A High EQ">
                   <span class="mono eq-val" id="eqValAHigh">0dB</span>
-                </label>
-                <label class="eq-slider-row">
-                  <span class="mono">MID</span>
-                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="0" data-eq-band="mid">
+                </div>
+                <div class="eq-slider-row">
+                  <button type="button" class="eq-kill-btn mono" data-kill-deck="0" data-kill-band="mid" title="Kill Deck A Mid Band (-48dB)">MID</button>
+                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="0" data-eq-band="mid" aria-label="Deck A Mid EQ">
                   <span class="mono eq-val" id="eqValAMid">0dB</span>
-                </label>
-                <label class="eq-slider-row">
-                  <span class="mono">LOW</span>
-                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="0" data-eq-band="low">
+                </div>
+                <div class="eq-slider-row">
+                  <button type="button" class="eq-kill-btn mono" data-kill-deck="0" data-kill-band="low" title="Kill Deck A Low Band (-48dB)">LOW</button>
+                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="0" data-eq-band="low" aria-label="Deck A Low EQ">
                   <span class="mono eq-val" id="eqValALow">0dB</span>
-                </label>
+                </div>
                 <label class="eq-slider-row">
                   <span class="mono">FLT</span>
                   <input type="range" min="-1" max="1" step="0.02" value="0" data-color-deck="0">
@@ -374,27 +468,82 @@
 
               <div class="eq-channel">
                 <div class="eq-chan-title mono">DECK B</div>
-                <label class="eq-slider-row">
-                  <span class="mono">HI</span>
-                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="1" data-eq-band="high">
+                <div class="eq-slider-row">
+                  <button type="button" class="eq-kill-btn mono" data-kill-deck="1" data-kill-band="high" title="Kill Deck B High Band (-48dB)">HI</button>
+                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="1" data-eq-band="high" aria-label="Deck B High EQ">
                   <span class="mono eq-val" id="eqValBHigh">0dB</span>
-                </label>
-                <label class="eq-slider-row">
-                  <span class="mono">MID</span>
-                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="1" data-eq-band="mid">
+                </div>
+                <div class="eq-slider-row">
+                  <button type="button" class="eq-kill-btn mono" data-kill-deck="1" data-kill-band="mid" title="Kill Deck B Mid Band (-48dB)">MID</button>
+                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="1" data-eq-band="mid" aria-label="Deck B Mid EQ">
                   <span class="mono eq-val" id="eqValBMid">0dB</span>
-                </label>
-                <label class="eq-slider-row">
-                  <span class="mono">LOW</span>
-                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="1" data-eq-band="low">
+                </div>
+                <div class="eq-slider-row">
+                  <button type="button" class="eq-kill-btn mono" data-kill-deck="1" data-kill-band="low" title="Kill Deck B Low Band (-48dB)">LOW</button>
+                  <input type="range" min="-24" max="6" step="0.5" value="0" data-eq-deck="1" data-eq-band="low" aria-label="Deck B Low EQ">
                   <span class="mono eq-val" id="eqValBLow">0dB</span>
-                </label>
+                </div>
                 <label class="eq-slider-row">
                   <span class="mono">FLT</span>
                   <input type="range" min="-1" max="1" step="0.02" value="0" data-color-deck="1">
                   <span class="mono eq-val" id="colorValB">FLAT</span>
                 </label>
               </div>
+            </div>
+          </details>
+
+          <details class="tone-drawer midi-drawer" id="midiControllerDrawer">
+            <summary class="mono">
+              <span id="midiDrawerSummary">HARDWARE WEB MIDI CONTROLLER &amp; LEARN MATRIX</span>
+              <span class="drawer-caret">MIDI MAP</span>
+            </summary>
+            <div class="midi-drawer-body">
+              <div class="midi-toolbar mono">
+                <div class="midi-status-cluster">
+                  <span class="midi-device-badge" id="midiDevicesReadout">DEVICES: 0 CONNECTED</span>
+                  <span class="midi-activity-badge" id="midiMonitorReadout">LAST MIDI: NONE</span>
+                </div>
+                <div class="midi-action-cluster">
+                  <div class="rocker-group" role="group" aria-label="Hardware Controller Profile">
+                    <button type="button" class="seg-btn active" data-midi-profile="pioneer-ddj" title="Pioneer DDJ-400 / FLX4 / SB3 Dual-Channel Map">PIONEER DDJ</button>
+                    <button type="button" class="seg-btn" data-midi-profile="numark-hercules" title="Numark Mixtrack / Hercules Inpulse Dual-Channel Map">NUMARK / HERC</button>
+                    <button type="button" class="seg-btn" data-midi-profile="generic-cc" title="Single-Channel USB MIDI Knob/Pad Bank (Akai / Korg / Novation)">GENERIC USB</button>
+                  </div>
+                  <button type="button" class="btn-micro mono" id="midiScanBtn" title="Request Web MIDI API access and scan connected USB MIDI DJ controllers">CONNECT / SCAN MIDI</button>
+                  <button type="button" class="btn-micro mono" id="midiResetMapBtn" title="Restore default Pioneer / Generic DJ Controller CC & Note mappings">RESET MAP</button>
+                </div>
+              </div>
+              <div class="midi-toolbar mono">
+                <div class="midi-action-cluster">
+                  <div class="rocker-group" role="group" aria-label="Jog Wheel Mode">
+                    <button type="button" class="seg-btn active" data-midi-jog-mode="vinyl" title="Jog Wheel directly scratches the vinyl groove (Kaiser-Sinc + M44-7)">JOG: VINYL</button>
+                    <button type="button" class="seg-btn" data-midi-jog-mode="nudge" title="Jog Wheel nudges playhead phase without stopping audio">JOG: NUDGE</button>
+                  </div>
+                  <div class="rocker-group" role="group" aria-label="Jog Wheel Sensitivity">
+                    <button type="button" class="seg-btn" data-midi-jog-sens="0.5" title="0.5x Fine Jog Sensitivity">0.5X</button>
+                    <button type="button" class="seg-btn active" data-midi-jog-sens="1.0" title="1.0x Standard Club Jog Sensitivity">1.0X</button>
+                    <button type="button" class="seg-btn" data-midi-jog-sens="1.8" title="1.8x Fast Battle Jog Sensitivity">1.8X</button>
+                  </div>
+                  <button type="button" class="seg-btn" id="midiSoftTakeoverBtn" aria-pressed="false" title="Soft Takeover (Pickup Mode): Physical pots must pass through the current software value before changing EQ, Pitch, or Faders">PICKUP: OFF</button>
+                  <button type="button" class="seg-btn" id="midiClockOutBtn" aria-pressed="false" title="Transmit 24 PPQN Real-Time MIDI Clock (0xF8) + Start/Stop to external hardware synths & drum machines">24PPQN CLK: OFF</button>
+                </div>
+                <div class="midi-action-cluster">
+                  <button type="button" class="btn-micro mono" id="midiExportJsonBtn" title="Download current MIDI controller mappings as a .json file">EXPORT .JSON</button>
+                  <label class="btn-micro mono" for="midiImportJsonInput" title="Load a saved .json MIDI controller mapping file">
+                    <span>IMPORT .JSON</span>
+                    <input type="file" id="midiImportJsonInput" accept=".json,application/json" hidden>
+                  </label>
+                </div>
+              </div>
+              <div class="midi-category-bar mono" role="group" aria-label="MIDI Control Categories">
+                <button type="button" class="seg-btn active" data-midi-cat="all">ALL (49)</button>
+                <button type="button" class="seg-btn" data-midi-cat="Jog & Playhead">JOG &amp; PLAYHEAD</button>
+                <button type="button" class="seg-btn" data-midi-cat="EQ & Filter">EQ &amp; KILLS</button>
+                <button type="button" class="seg-btn" data-midi-cat="Mixer & Faders">14-BIT FADERS &amp; PITCH</button>
+                <button type="button" class="seg-btn" data-midi-cat="Transport & Loops">TRANSPORT &amp; LOOPS</button>
+                <button type="button" class="seg-btn" data-midi-cat="Pads & FX">8 PADS &amp; FX</button>
+              </div>
+              <div class="midi-mapping-grid mono" id="midiMappingGrid" aria-label="MIDI Control Assignments (Click any control then move a hardware knob, jog wheel, or pad to bind)"></div>
             </div>
           </details>
         </div>
@@ -407,6 +556,7 @@
             <div class="lcd-kicker mono">
               <span class="deck-badge-b">DECK B</span>
               <span id="deckBStatusText">CUED</span>
+              <button type="button" id="cueListenB" class="btn-pfl mono" title="Pre-Fader Headphone Cue (Routes to Right Channel in Split-Cue Mode)">CUE</button>
             </div>
             <h2 class="lcd-title" id="deckBTitle">Neon Ignition</h2>
             <p class="lcd-meta mono" id="deckBMeta">126.0 BPM / Key 9A</p>
@@ -453,29 +603,46 @@
           </div>
         </div>
 
+        <!-- Per-Deck Transport, Sync, Beat Jump & Pitch Fader (Deck B) -->
+        <div class="deck-transport-strip">
+          <div class="deck-transport-row">
+            <button type="button" id="deckPlayB" class="hw-key deck-play-btn" title="Play / Pause Deck B independently (Shift+P)">PLAY B</button>
+            <button type="button" id="deckSyncB" class="hw-key deck-sync-btn" title="Sync Deck B BPM and Beat Phase to Deck A">SYNC</button>
+            <button type="button" class="hw-key beatjump-btn" data-beatjump-deck="1" data-beats="-16" title="Jump Back 4 Bars (-16 Beats)">-4B</button>
+            <button type="button" class="hw-key beatjump-btn" data-beatjump-deck="1" data-beats="-4" title="Jump Back 1 Bar (-4 Beats)">-1B</button>
+            <button type="button" class="hw-key beatjump-btn" data-beatjump-deck="1" data-beats="4" title="Jump Forward 1 Bar (+4 Beats)">+1B</button>
+            <button type="button" class="hw-key beatjump-btn" data-beatjump-deck="1" data-beats="16" title="Jump Forward 4 Bars (+16 Beats)">+4B</button>
+          </div>
+          <label class="deck-pitch-row mono" title="Deck B Pitch / Tempo Fader (-8% to +8%, double-click to reset to 0%)">
+            <span>PITCH</span>
+            <input type="range" id="pitchSliderB" min="-8" max="8" step="0.1" value="0">
+            <span id="pitchValB" class="pitch-readout">0.0%</span>
+          </label>
+        </div>
+
         <!-- 4 Tactile Cue Pads -->
         <div class="pad-bank">
           <div class="bank-label mono">
             <span>HOT CUES</span>
-            <span>BEAT SNAP</span>
+            <span>SHIFT+CLICK SET</span>
           </div>
           <div class="mpc-row-4">
-            <button type="button" class="cue-btn mpc-pad" data-deck="1" data-cue="intro">
+            <button type="button" class="cue-btn mpc-pad" data-deck="1" data-cue="intro" title="Click to jump to INTRO · Shift+Click to set INTRO at current playhead">
               <span class="mpc-led"></span>
               <strong>INTRO</strong>
               <small class="mono" id="cueTimeBIntro">0:01</small>
             </button>
-            <button type="button" class="cue-btn mpc-pad" data-deck="1" data-cue="drop">
+            <button type="button" class="cue-btn mpc-pad" data-deck="1" data-cue="drop" title="Click to jump to DROP · Shift+Click to set DROP at current playhead">
               <span class="mpc-led"></span>
               <strong>DROP</strong>
               <small class="mono" id="cueTimeBDrop">0:08</small>
             </button>
-            <button type="button" class="cue-btn mpc-pad" data-deck="1" data-cue="breakdown">
+            <button type="button" class="cue-btn mpc-pad" data-deck="1" data-cue="breakdown" title="Click to jump to BREAK · Shift+Click to set BREAK at current playhead">
               <span class="mpc-led"></span>
               <strong>BREAK</strong>
               <small class="mono" id="cueTimeBBreak">0:22</small>
             </button>
-            <button type="button" class="cue-btn mpc-pad" data-deck="1" data-cue="outro">
+            <button type="button" class="cue-btn mpc-pad" data-deck="1" data-cue="outro" title="Click to jump to OUTRO · Shift+Click to set OUTRO at current playhead">
               <span class="mpc-led"></span>
               <strong>OUTRO</strong>
               <small class="mono" id="cueTimeBOutro">0:36</small>
@@ -489,22 +656,84 @@
             <span>AUTO LOOP</span>
             <span id="loopStatusB">OFF</span>
           </div>
-          <div class="loop-key-row">
+          <div class="loop-key-row loop-key-row-7">
+            <button type="button" class="loop-op-btn hw-key" data-deck="1" data-loop-op="halve" title="Halve active loop length (down to 1/8 bar stutter roll)">1/2x</button>
             <button type="button" class="loop-btn hw-key" data-deck="1" data-bars="0.5">1/2</button>
             <button type="button" class="loop-btn hw-key" data-deck="1" data-bars="1">1B</button>
             <button type="button" class="loop-btn hw-key" data-deck="1" data-bars="2">2B</button>
             <button type="button" class="loop-btn hw-key" data-deck="1" data-bars="4">4B</button>
             <button type="button" class="loop-btn hw-key" data-deck="1" data-bars="8">8B</button>
+            <button type="button" class="loop-op-btn hw-key" data-deck="1" data-loop-op="double" title="Double active loop length (up to 16 bars)">2x</button>
           </div>
         </div>
       </article>
     </section>
 
-    <!-- HARDWARE TRACK CRATE & AUDIO CARTRIDGE BAY (Card Grid instead of dense table) -->
-    <section class="crate-bay songs" id="track-crate" aria-label="Studio Track Crate">
+    <!-- HARDWARE TRACK CRATE & CLUB MARATHON DIRECTOR BAY -->
+    <section class="crate-bay songs" id="track-crate" aria-label="Studio Track Crate and Marathon Director">
       <div class="crate-header-row">
-        <h2 class="crate-heading">Studio Track Crate</h2>
+        <div class="crate-title-cluster">
+          <h2 class="crate-heading">Club Marathon &amp; Track Crate</h2>
+          <span class="mono marathon-badge" id="wakeLockBadge" title="Screen WakeLock + LRU AudioBuffer Eviction for Multi-Hour Sets">MARATHON STANDBY</span>
+        </div>
         <div class="party-template-bar" id="partyTemplates" role="group" aria-label="Party Vibe Presets"></div>
+      </div>
+
+      <!-- Club Marathon Energy Curve & Booth Routing Strip -->
+      <div class="marathon-director-strip" aria-label="Marathon Energy Curve and Booth Controls">
+        <div class="marathon-curve-oled">
+          <div class="marathon-oled-top mono">
+            <span id="marathonArcLabel">ENERGY ARC: CLUB PEAK 4H</span>
+            <span id="targetEnergyReadout">TARGET ENERGY 55%</span>
+            <span id="sessionClockReadout">SET 00:00 / 4H</span>
+          </div>
+          <canvas id="energyCurveCanvas" width="520" height="44" aria-label="Party Energy Curve and Queued Track Trajectory"></canvas>
+        </div>
+
+        <div class="marathon-controls-col">
+          <div class="marathon-top-switches">
+            <div class="rocker-group" role="group" aria-label="Marathon Set Duration">
+              <button type="button" class="seg-btn" data-marathon-mins="60">1H</button>
+              <button type="button" class="seg-btn" data-marathon-mins="120">2H</button>
+              <button type="button" class="seg-btn active" data-marathon-mins="240">4H CLUB</button>
+              <button type="button" class="seg-btn" data-marathon-mins="0" title="Endless 60-minute wave cycle">ENDLESS</button>
+            </div>
+
+            <button type="button" id="autoSequenceBtn" class="hw-btn-amber marathon-seq-btn" title="Sort Up Next Queue by Camelot Harmonic Key, BPM Lock, and Target Energy Curve">
+              <span>AUTO-SEQUENCE QUEUE</span>
+            </button>
+          </div>
+
+          <div class="marathon-booth-switches mono">
+            <button type="button" id="autoGainToggle" class="hw-key booth-toggle active" aria-pressed="true" title="Normalize deck loudness to -11.5 dBFS club standard">
+              AUTO-GAIN: ON
+            </button>
+            <button type="button" id="splitCueToggle" class="hw-key booth-toggle" aria-pressed="false" title="Split output for Y-cable: Left = Master PA, Right = Pre-Fader Headphone Cue">
+              SPLIT CUE (L:MST / R:CUE): OFF
+            </button>
+            <button type="button" id="autoScratchToggle" class="hw-key booth-toggle active" aria-pressed="true" title="Automatically drop a beat-locked 90s Scratch Agent cut 6 bars before Auto-DJ transitions">
+              AUTO-SCRATCH DROPS: ON
+            </button>
+            <button type="button" id="exportSetlistBtn" class="hw-key booth-toggle" title="Download played track history as .M3U8 setlist with timestamps, BPM, and Camelot keys">
+              EXPORT SETLIST (<span id="setlistCountBadge">0</span>)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="crate-filter-bar mono">
+        <label class="crate-search-box" for="crateSearchInput">
+          <span>SEARCH CRATE</span>
+          <input type="search" id="crateSearchInput" placeholder="Filter by title, genre, key (8A), or BPM...">
+        </label>
+        <div class="crate-filter-actions">
+          <button type="button" id="crateKeyFilterBtn" class="hw-key booth-toggle" aria-pressed="false" title="Show only tracks harmonically compatible with the active Master Deck">
+            HARMONIC MATCH ONLY: OFF
+          </button>
+          <button type="button" id="queueAllCrateBtn" class="hw-key booth-toggle" title="Queue all filtered tracks into Up Next">
+            + QUEUE FILTERED
+          </button>
+        </div>
       </div>
 
       <div class="crate-layout" id="drop">
@@ -518,8 +747,11 @@
           </label>
           <div class="upnext-queue-box">
             <div class="queue-box-header mono">
-              <span>UP NEXT QUEUE</span>
-              <span id="queueCount">2 tracks</span>
+              <span>UP NEXT QUEUE (<span id="queueCount">2</span>)</span>
+              <div class="queue-header-btns">
+                <button type="button" id="shuffleQueueBtn" class="btn-micro" title="Shuffle Up Next Queue">Shuffle</button>
+                <button type="button" id="clearQueueBtn" class="btn-micro" title="Clear Up Next Queue">Clear</button>
+              </div>
             </div>
             <ol id="queue" class="queue-list"></ol>
           </div>

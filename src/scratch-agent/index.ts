@@ -9,5 +9,7 @@ export * from "./composer/compose";
 export * from "./critic/rules";
 export * from "./director/rulesDirector";
 export * from "./director/llmDirector";
+export * from "./director/sentenceDirector";
+export * from "./analysis/banks";
 export * from "./analysis/slicerLite";
 export * from "./pipeline";
