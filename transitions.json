@@ -1,6 +1,0 @@
-[
- {"id":"smooth","name":"Smooth Blend","bars":16,"curve":"equal-power"},
- {"id":"quick","name":"Quick Cut","bars":0,"curve":"cut"},
- {"id":"filter","name":"Filter Sweep","bars":8,"curve":"equal-power","filterSweep":true},
- {"id":"long","name":"Long Fade","bars":32,"curve":"linear"}
-]

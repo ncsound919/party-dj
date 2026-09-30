@@ -1,7 +1,7 @@
 import type { TransitionPreset } from "./types";
 import type { Deck } from "./deck";
 
-/** Schedules gain/filter automation. Returns the transition end time (ctx seconds). */
+/** Schedules gain/filter/EQ automation. Returns the transition end time (ctx seconds). */
 export function runTransition(from: Deck, to: Deck, p: TransitionPreset, startAt: number, secPerBar: number) {
   const dur = p.bars * secPerBar;
   if (p.curve === "cut" || dur <= 0) {
@@ -18,9 +18,24 @@ export function runTransition(from: Deck, to: Deck, p: TransitionPreset, startAt
   }
   from.out.gain.setValueCurveAtTime(fadeOut, startAt, dur);
   to.out.gain.setValueCurveAtTime(fadeIn, startAt, dur);
+
   if (p.filterSweep) {
     from.filter.frequency.setValueAtTime(10, startAt);
     from.filter.frequency.exponentialRampToValueAtTime(4000, end);
   }
+
+  // Clean low-end bass swap at the midpoint of the phrase so two kicks never clash
+  if (p.bassSwap) {
+    const midTime = startAt + dur * 0.5;
+    to.lowEq.gain.cancelScheduledValues(startAt);
+    from.lowEq.gain.cancelScheduledValues(startAt);
+    to.lowEq.gain.setValueAtTime(-18, startAt);
+    to.lowEq.gain.linearRampToValueAtTime(to.lowDb, midTime);
+    from.lowEq.gain.setValueAtTime(from.lowDb, startAt);
+    from.lowEq.gain.linearRampToValueAtTime(-18, end);
+    // Restore outgoing deck's low EQ setting after it stops
+    from.lowEq.gain.setValueAtTime(from.lowDb, end + 0.15);
+  }
+
   return end;
 }
