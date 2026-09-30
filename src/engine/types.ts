@@ -56,7 +56,7 @@ export interface ScratchPattern {
 
 export interface ScratchTelemetry {
   active: boolean;
-  patternId: ScratchPatternId | "manual" | null;
+  patternId: ScratchPatternId | "manual" | "agent" | null;
   patternName: string;
   deck: 0 | 1;
   progress: number;       // 0..1

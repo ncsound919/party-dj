@@ -4,7 +4,7 @@ export const SCRATCH_PATTERNS: ScratchPattern[] = [
   {
     id: "baby",
     name: "Baby Scratch",
-    subtitle: "Open Fader · 2 Beats",
+    subtitle: "Open Fader / 2 Beats",
     beats: 2,
     clicksPerBeat: 0,
     description: "Foundational forward-and-reverse vinyl oscillation with crossfader wide open.",
@@ -12,7 +12,7 @@ export const SCRATCH_PATTERNS: ScratchPattern[] = [
   {
     id: "flare",
     name: "2-Click Orbit Flare",
-    subtitle: "6 Notes/Cycle · 2 Beats",
+    subtitle: "6 Notes/Cycle / 2 Beats",
     beats: 2,
     clicksPerBeat: 4,
     description: "Starts open, slices both forward and reverse strokes with two rapid crossfader clicks.",
@@ -20,7 +20,7 @@ export const SCRATCH_PATTERNS: ScratchPattern[] = [
   {
     id: "transformer",
     name: "Transformer",
-    subtitle: "1/16 Gate Stabs · 2 Beats",
+    subtitle: "1/16 Gate Stabs / 2 Beats",
     beats: 2,
     clicksPerBeat: 8,
     description: "Long pitched vinyl sweep chopped rhythmically by staccato crossfader punches.",
@@ -28,7 +28,7 @@ export const SCRATCH_PATTERNS: ScratchPattern[] = [
   {
     id: "chirp",
     name: "Chirp Scratch",
-    subtitle: "Edge Cut · 2 Beats",
+    subtitle: "Edge Cut / 2 Beats",
     beats: 2,
     clicksPerBeat: 2,
     description: "Sharp fader closure at peak platter turnaround produces a rising/falling chirp transient.",
@@ -36,7 +36,7 @@ export const SCRATCH_PATTERNS: ScratchPattern[] = [
   {
     id: "crab",
     name: "4-Finger Crab",
-    subtitle: "Quadruplet Roll · 2 Beats",
+    subtitle: "Quadruplet Roll / 2 Beats",
     beats: 2,
     clicksPerBeat: 12,
     description: "High-speed spring-loaded 4-finger crossfader bounces across a reverse vinyl pull.",
@@ -44,7 +44,7 @@ export const SCRATCH_PATTERNS: ScratchPattern[] = [
   {
     id: "tear",
     name: "Tear Scratch",
-    subtitle: "Split Reverse · 2 Beats",
+    subtitle: "Split Reverse / 2 Beats",
     beats: 2,
     clicksPerBeat: 0,
     description: "Smooth forward push followed by a two-step paused reverse pull for 3 distinct notes.",
@@ -52,7 +52,7 @@ export const SCRATCH_PATTERNS: ScratchPattern[] = [
   {
     id: "backspin",
     name: "Vinyl Backspin",
-    subtitle: "Whipped Rewind · 4 Beats",
+    subtitle: "Whipped Rewind / 4 Beats",
     beats: 4,
     clicksPerBeat: 0,
     description: "High-velocity reverse platter whip (-3.4x) decaying exponentially to a dead stop.",
@@ -60,7 +60,7 @@ export const SCRATCH_PATTERNS: ScratchPattern[] = [
   {
     id: "uzis",
     name: "Laser Stutter",
-    subtitle: "Micro-Gate · 2 Beats",
+    subtitle: "Micro-Gate / 2 Beats",
     beats: 2,
     clicksPerBeat: 16,
     description: "Accelerating 1/16 to 1/32 beat-locked forward stutter roll that drops on the downbeat.",
@@ -85,19 +85,16 @@ export function evaluateScratchTrajectory(
   totalBeats: number,
   intensity = 1.0
 ): { velocity: number; faderGain: number } {
-  const scale = 0.75 + 0.45 * intensity; // 0.75x (Subtle) .. 1.2x (Turntablist)
+  const scale = 0.75 + 0.45 * intensity;
 
   switch (patternId) {
     case "baby": {
-      // 2 cycles per beat (1/8th note forward + 1/8th note backward)
       const cycle = (beatPos * 2) % 1;
       const velocity = Math.cos(cycle * 2 * Math.PI) * 1.45 * scale;
       return { velocity, faderGain: 1.0 };
     }
 
     case "flare": {
-      // 2-Click Orbit: 1 full forward-backward orbit per beat, with 2 clicks on forward (t=0.16, 0.33)
-      // and 2 clicks on reverse (t=0.66, 0.83)
       const cycle = (beatPos * 1.5) % 1;
       const velocity = Math.cos(cycle * 2 * Math.PI) * 1.65 * scale;
       const clickCenters = [0.16, 0.33, 0.66, 0.83];
@@ -113,7 +110,6 @@ export function evaluateScratchTrajectory(
     }
 
     case "transformer": {
-      // Slow 1-beat forward, 1-beat reverse sweep chopped by 8 crossfader stabs per beat
       const slowCycle = (beatPos * 0.5) % 1;
       const velocity = (slowCycle < 0.5 ? 1.15 : -1.25) * scale * (0.7 + 0.3 * Math.sin(slowCycle * Math.PI * 2));
       const chopPhase = (beatPos * 8) % 1;
@@ -126,10 +122,8 @@ export function evaluateScratchTrajectory(
     }
 
     case "chirp": {
-      // Fast forward/reverse where fader snaps shut right as platter decelerates to turnaround
       const cycle = (beatPos * 2) % 1;
       const velocity = Math.sin(cycle * 2 * Math.PI) * 1.85 * scale;
-      // Open near zero-crossings of displacement (0..0.22 and 0.5..0.72), closed at turnarounds
       const halfCycle = cycle % 0.5;
       const openLen = 0.24;
       const faderGain =
@@ -140,15 +134,12 @@ export function evaluateScratchTrajectory(
     }
 
     case "crab": {
-      // Rapid 4-finger quadruplet fader bounces on reverse stroke + clean forward release
       const cycle = (beatPos * 1.5) % 1;
       if (cycle < 0.32) {
-        // Quick forward release
         const velocity = 1.6 * scale * Math.sin((cycle / 0.32) * Math.PI);
         const faderGain = smoothEdge(cycle, 0.05) * smoothEdge(0.32 - cycle, 0.05);
         return { velocity, faderGain };
       }
-      // 4-finger crab over reverse pull (0.32 .. 1.0)
       const crabNorm = (cycle - 0.32) / 0.68;
       const velocity = -1.45 * scale * (0.8 + 0.4 * Math.sin(crabNorm * Math.PI));
       const fingerPhase = (crabNorm * 4) % 1;
@@ -160,7 +151,6 @@ export function evaluateScratchTrajectory(
     }
 
     case "tear": {
-      // 1 smooth forward push (0..0.42), then 2 distinct backward pulls separated by a brief dead-stop pause
       const cycle = (beatPos * 1.5) % 1;
       let velocity = 0;
       if (cycle < 0.42) {
@@ -168,7 +158,7 @@ export function evaluateScratchTrajectory(
       } else if (cycle < 0.68) {
         velocity = -1.75 * scale * Math.sin(((cycle - 0.42) / 0.26) * Math.PI);
       } else if (cycle < 0.74) {
-        velocity = 0; // tactile vinyl pause between reverse tears
+        velocity = 0;
       } else {
         velocity = -1.45 * scale * Math.sin(((cycle - 0.74) / 0.26) * Math.PI);
       }
@@ -176,7 +166,6 @@ export function evaluateScratchTrajectory(
     }
 
     case "backspin": {
-      // Initial forward catch then high-speed reverse spin decaying exponentially
       const norm = Math.max(0, Math.min(1, beatPos / totalBeats));
       if (norm < 0.08) {
         return { velocity: 1.0 - (norm / 0.08) * 4.4 * scale, faderGain: 1.0 };
@@ -188,7 +177,6 @@ export function evaluateScratchTrajectory(
     }
 
     case "uzis": {
-      // Accelerating forward stutter roll with rising pitch
       const norm = Math.max(0, Math.min(1, beatPos / totalBeats));
       const subdiv = norm < 0.5 ? 8 : 16;
       const subPhase = (beatPos * subdiv) % 1;
@@ -226,7 +214,6 @@ function sampleHermite(chan: Float32Array, exactIdx: number): number {
 /**
  * Renders a sample-accurate stereo AudioBuffer performing bidirectional vinyl scratching
  * over `sourceBuf` anchored at `anchorSec` for `totalBeats` at `secPerBeat`.
- * Also returns 128-point curve & gate telemetry arrays for real-time visualization.
  */
 export function renderScratchBuffer(
   ctx: BaseAudioContext,
@@ -255,7 +242,6 @@ export function renderScratchBuffer(
   const curveSamples = new Float32Array(128);
   const gateSamples = new Float32Array(128);
 
-  // Start slightly ahead in the sample if backspinning so reverse travel has rich audio material
   const startOffsetSec =
     patternId === "backspin"
       ? Math.min(sourceBuf.duration - 0.1, Math.max(2.5, anchorSec))
@@ -265,7 +251,6 @@ export function renderScratchBuffer(
   const minSample = 0.05 * sr;
   const maxSample = Math.max(minSample + sr * 0.2, (sourceBuf.duration - 0.05) * sr);
 
-  // Subtle resonant DJ mixer emphasis at turnaround transients
   let lpL = 0, lpR = 0;
 
   for (let i = 0; i < totalSamples; i++) {
@@ -274,14 +259,12 @@ export function renderScratchBuffer(
     const { velocity, faderGain } = evaluateScratchTrajectory(patternId, beatPos, totalBeats, intensity);
 
     headSample += velocity;
-    // Wrap softly within valid region so even extreme scratches never run into silence
     if (headSample < minSample) {
       headSample = minSample + (minSample - headSample) * 0.5;
     } else if (headSample > maxSample) {
       headSample = maxSample - (headSample - maxSample) * 0.5;
     }
 
-    // For uzi stutter roll, re-trigger anchor on every 1/8 or 1/16 note boundary
     if (patternId === "uzis") {
       const subdiv = beatPos / totalBeats < 0.5 ? 0.25 : 0.125;
       const localBeat = beatPos % subdiv;
@@ -293,13 +276,11 @@ export function renderScratchBuffer(
     const rawL = sampleHermite(srcL, headSample);
     const rawR = sampleHermite(srcR, headSample);
 
-    // Slight high-frequency presence boost when platter moves fast (>1.2x) like a real stylus
     const speedAbs = Math.abs(velocity);
     const alpha = Math.min(0.85, 0.15 + speedAbs * 0.25);
     lpL += alpha * (rawL - lpL);
     lpR += alpha * (rawR - lpR);
 
-    // Master envelope fade-in/out (3ms) to prevent boundary click
     const envEdge = Math.min(1, i / (0.003 * sr), (totalSamples - 1 - i) / (0.004 * sr));
     const gain = faderGain * envEdge;
 
@@ -315,48 +296,62 @@ export function renderScratchBuffer(
 }
 
 /**
- * Synthesizes a classic turntablist battle-record scratch sample ("Ahhh / Fresh" formant vocal + brass hit)
- * so the user can scratch an authentic DJ lead cut over any playing track.
+ * Synthesizes a 90s boom-bap turntablist battle hook buffer (4.0s) with 12 distinct
+ * syllable/horn/vocal stabs spaced 240ms-340ms apart so both transient slice detection
+ * (`buildSliceBank`) and manual/pattern scratching have rich 80-400ms slices.
  */
 export function createTurntablistCutBuffer(ctx: BaseAudioContext): AudioBuffer {
   const sr = ctx.sampleRate;
-  const dur = 2.4;
+  const dur = 4.0;
   const len = Math.floor(sr * dur);
   const buf = ctx.createBuffer(2, len, sr);
   const L = buf.getChannelData(0);
   const R = buf.getChannelData(1);
 
-  // Classic "Ahhh" formant vowel frequencies (F1=730Hz, F2=1090Hz, F3=2440Hz) over a 130.81Hz (C3) sawtooth carrier
-  for (let i = 0; i < len; i++) {
-    const t = i / sr;
-    // 0.0 .. 1.1s: "Ahhh" vocal synth cut + crisp transient attack
-    // 1.1 .. 2.4s: "Fresh" high-harmonic stab + sub punch
-    const f0 = t < 1.1 ? 146.83 * (1 - 0.03 * t) : 196.0 * (1 + 0.08 * Math.sin(t * 18));
-    let sig = 0;
+  // 12 classic 90s battle-record vocal/brass syllables (each 180ms-280ms long with clear gaps)
+  const syllables: Array<{ start: number; len: number; f0: number; f1: number; f2: number; noiseAmt: number }> = [
+    { start: 0.08, len: 0.24, f0: 146.8, f1: 730, f2: 1090, noiseAmt: 0.45 }, // "Ahhh"
+    { start: 0.42, len: 0.20, f0: 196.0, f1: 520, f2: 1850, noiseAmt: 0.65 }, // "Fresh"
+    { start: 0.76, len: 0.22, f0: 164.8, f1: 680, f2: 1200, noiseAmt: 0.35 }, // "Hit"
+    { start: 1.08, len: 0.26, f0: 220.0, f1: 800, f2: 1450, noiseAmt: 0.50 }, // "Cut"
+    { start: 1.46, len: 0.22, f0: 130.8, f1: 710, f2: 1100, noiseAmt: 0.40 }, // "Drop"
+    { start: 1.80, len: 0.25, f0: 174.6, f1: 600, f2: 1650, noiseAmt: 0.55 }, // "Check"
+    { start: 2.16, len: 0.21, f0: 196.0, f1: 750, f2: 1300, noiseAmt: 0.45 }, // "Yeah"
+    { start: 2.50, len: 0.26, f0: 155.6, f1: 540, f2: 1780, noiseAmt: 0.60 }, // "Scratch"
+    { start: 2.88, len: 0.22, f0: 233.1, f1: 820, f2: 1520, noiseAmt: 0.40 }, // "Rock"
+    { start: 3.22, len: 0.24, f0: 146.8, f1: 700, f2: 1180, noiseAmt: 0.50 }, // "Now"
+    { start: 3.58, len: 0.28, f0: 196.0, f1: 650, f2: 1400, noiseAmt: 0.45 }, // "One"
+  ];
 
-    // Rich harmonic series shaped by vocal formants
-    for (let h = 1; h <= 18; h++) {
-      const fh = f0 * h;
-      const f1 = Math.exp(-Math.pow((fh - 730) / 180, 2));
-      const f2 = 0.75 * Math.exp(-Math.pow((fh - 1150) / 220, 2));
-      const f3 = 0.45 * Math.exp(-Math.pow((fh - 2550) / 320, 2));
-      const weight = (f1 + f2 + f3 + 0.12 / h);
-      sig += weight * Math.sin(2 * Math.PI * fh * t + h * 0.3);
+  for (const syl of syllables) {
+    const iStart = Math.floor(syl.start * sr);
+    const iEnd = Math.min(len, Math.floor((syl.start + syl.len) * sr));
+    for (let i = iStart; i < iEnd; i++) {
+      const localT = (i - iStart) / sr;
+      const normT = localT / syl.len;
+      const pitchBend = 1 - 0.06 * normT + 0.02 * Math.sin(localT * 32);
+      const f0 = syl.f0 * pitchBend;
+
+      let sig = 0;
+      for (let h = 1; h <= 16; h++) {
+        const fh = f0 * h;
+        const w1 = Math.exp(-Math.pow((fh - syl.f1) / 190, 2));
+        const w2 = 0.8 * Math.exp(-Math.pow((fh - syl.f2) / 240, 2));
+        const w3 = 0.4 * Math.exp(-Math.pow((fh - 2600) / 350, 2));
+        sig += (w1 + w2 + w3 + 0.1 / h) * Math.sin(2 * Math.PI * fh * localT + h * 0.25);
+      }
+
+      const noise = ((Math.sin(i * 12.9898) * 43758.5453) % 1) * 2 - 1;
+      const consonant = localT < 0.035 ? noise * Math.exp(-localT * 65) * syl.noiseAmt : 0;
+      const env =
+        Math.min(1, localT / 0.006) *
+        Math.min(1, (syl.len - localT) / 0.015) *
+        Math.exp(-localT * 2.2);
+
+      const sample = Math.tanh((sig * 0.44 + consonant) * env * 1.7) * 0.85;
+      L[i] = sample;
+      R[i] = sample * 0.98;
     }
-
-    // Add initial breath/consonant transient ("Frrr-esh")
-    const noise = (Math.sin(i * 12.9898) * 43758.5453) % 1;
-    const attackNoise = t < 0.09 ? noise * Math.exp(-t * 35) * 0.45 : 0;
-    const secondTransient = t >= 1.1 && t < 1.22 ? noise * Math.exp(-(t - 1.1) * 28) * 0.55 : 0;
-
-    const env =
-      t < 1.1
-        ? Math.min(1, t / 0.012) * Math.exp(-Math.max(0, t - 0.15) * 0.8)
-        : Math.min(1, (t - 1.1) / 0.01) * Math.exp(-Math.max(0, t - 1.2) * 1.1);
-
-    const sample = Math.tanh((sig * 0.42 + attackNoise + secondTransient) * env * 1.6) * 0.85;
-    L[i] = sample;
-    R[i] = sample * 0.98;
   }
 
   return buf;

@@ -1,13 +1,15 @@
 import "./style.css";
 import { Mixer } from "./engine/mixer";
+import type { AgentTriggerOutput } from "./engine/mixer";
 import { SCRATCH_PATTERNS } from "./engine/scratch";
 import { evaluateHarmonicMatch } from "./engine/sync";
 import { BUILTIN_TRACK_SPECS, synthesizeStudioTrack } from "./engine/synthTracks";
+import { applyHeadroom, encodeWav16 } from "./scratch-agent";
+import type { Style } from "./scratch-agent";
 import transitions from "./presets/transitions.json";
 import partyTemplates from "./presets/party-templates.json";
 import type {
   PartyTemplate,
-  ScratchPatternId,
   ScratchSourceMode,
   TrackAnalysis,
   TransitionPreset,
@@ -48,6 +50,13 @@ let loading = false;
 let freePending = false;
 let toastTimer = 0;
 
+// 90s Scratch Agent State
+let agentBars: 2 | 4 = 2;
+let agentStyle: Style = "medium";
+let agentPlacementMode: "hook" | "answer" = "answer";
+let lastAgentOutput: AgentTriggerOutput | null = null;
+let agentRunning = false;
+
 // Platter rotation tracking (degrees)
 const platterAngles = [0, 0];
 let lastFrameTime = performance.now();
@@ -63,12 +72,20 @@ function toast(msg: string) {
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => {
     $("toast").textContent = autoPilotEnabled
-      ? "Auto-DJ Pilot Active · Phrase-Synced Automix Armed"
-      : "Ready · Click any Scratch Pad (1-8) or Smart Mix";
+      ? "Auto-DJ Pilot Active - Phrase Automix Armed"
+      : "Ready - Press Start Party or trigger any scratch pad (keys 1-8)";
   }, 4500);
 }
 
-// 1. Render Transition Style Presets
+// 1. Render 5 Interlocking Transition Preset Keys
+const SHORT_PRESET_LABELS: Record<string, string> = {
+  smooth: "Smooth",
+  "bass-swap": "Bass Swap",
+  filter: "Filter",
+  quick: "Quick Cut",
+  long: "Long Blend",
+};
+
 const blendContainer = $("blend");
 for (const p of presets) {
   const l = document.createElement("label");
@@ -79,8 +96,8 @@ for (const p of presets) {
   i.name = "blend";
   i.value = p.id;
   i.checked = p.id === selectedPresetId;
-  s.textContent = p.name;
-  sm.textContent = p.bars ? `${p.bars} bars · ${p.curve}` : "0 bars · instant";
+  s.textContent = SHORT_PRESET_LABELS[p.id] ?? p.name;
+  sm.textContent = p.bars ? `${p.bars} bars` : "Instant";
   s.append(sm);
   l.append(i, s);
   blendContainer.append(l);
@@ -88,22 +105,47 @@ for (const p of presets) {
 blendContainer.addEventListener("change", e => {
   selectedPresetId = (e.target as HTMLInputElement).value;
   const p = presets.find(x => x.id === selectedPresetId);
-  if (p) toast(`Transition preset: ${p.name} (${p.bars} bars)`);
+  if (p) toast(`Transition mode: ${p.name} (${p.bars} bars)`);
 });
 
-// 2. Render 8 Beat-Quantized Autoscratch Performance Pads
+// 2. Render 8 Fitted Autoscratch Performance Pads (4x2 Matrix)
+const COMPACT_SCRATCH_LABELS: Record<string, { title: string; tag: string }> = {
+  baby: { title: "Baby Scratch", tag: "2B OPEN" },
+  flare: { title: "Orbit Flare", tag: "2B 2-CLK" },
+  transformer: { title: "Transformer", tag: "2B GATE" },
+  chirp: { title: "Chirp Cut", tag: "2B EDGE" },
+  crab: { title: "4-Finger Crab", tag: "2B ROLL" },
+  tear: { title: "Tear Scratch", tag: "2B SPLIT" },
+  backspin: { title: "Backspin", tag: "4B WHIP" },
+  uzis: { title: "Laser Stutter", tag: "2B 1/32" },
+};
+
 const scratchPadsContainer = $("scratchPads");
 SCRATCH_PATTERNS.forEach((pat, idx) => {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "scratch-pad-btn";
   btn.dataset.scratchId = pat.id;
-  btn.title = `${pat.description} (Shortcut: Key ${idx + 1})`;
+  btn.title = `${pat.name}: ${pat.description} (Key ${idx + 1})`;
+
+  const compact = COMPACT_SCRATCH_LABELS[pat.id] ?? {
+    title: pat.name,
+    tag: `${pat.beats}B`,
+  };
+
+  const topRow = document.createElement("div");
+  topRow.className = "scratch-pad-top";
+  const keySpan = document.createElement("span");
+  keySpan.className = "scratch-pad-key";
+  keySpan.textContent = `0${idx + 1}`;
+  const tagSpan = document.createElement("span");
+  tagSpan.textContent = compact.tag;
+  topRow.append(keySpan, tagSpan);
+
   const title = document.createElement("strong");
-  title.textContent = `${idx + 1}. ${pat.name}`;
-  const sub = document.createElement("small");
-  sub.textContent = pat.subtitle;
-  btn.append(title, sub);
+  title.textContent = compact.title;
+
+  btn.append(topRow, title);
 
   btn.addEventListener("click", async () => {
     await mixer.ctx.resume();
@@ -114,7 +156,7 @@ SCRATCH_PATTERNS.forEach((pat, idx) => {
   scratchPadsContainer.append(btn);
 });
 
-// Scratch Source Mode & Intensity Segmented Controls
+// Scratch Source Mode & Intensity Switches
 document.querySelectorAll<HTMLButtonElement>("[data-scratch-source]").forEach(btn => {
   btn.addEventListener("click", () => {
     document
@@ -137,6 +179,160 @@ document.querySelectorAll<HTMLButtonElement>("[data-scratch-intensity]").forEach
   });
 });
 
+// 2B. 90s Scratch Agent Controls, Critic QA Inspector & WAV Export
+document.querySelectorAll<HTMLButtonElement>("[data-agent-bars]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll<HTMLButtonElement>("[data-agent-bars]").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    agentBars = Number(btn.dataset.agentBars) === 4 ? 4 : 2;
+    toast(`90s Agent phrase length: ${agentBars} bars`);
+  });
+});
+
+document.querySelectorAll<HTMLButtonElement>("[data-agent-style]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll<HTMLButtonElement>("[data-agent-style]").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    agentStyle = (btn.dataset.agentStyle as Style) || "medium";
+    toast(`90s Agent style: ${agentStyle.toUpperCase()}`);
+  });
+});
+
+document.querySelectorAll<HTMLButtonElement>("[data-agent-mode]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll<HTMLButtonElement>("[data-agent-mode]").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    agentPlacementMode = btn.dataset.agentMode === "hook" ? "hook" : "answer";
+    toast(
+      agentPlacementMode === "answer"
+        ? "90s Agent pocket: ANSWER (Beats 1-2 open for vocal, scratch on beats 3-4)"
+        : "90s Agent pocket: HOOK (Scratch across all beats)"
+    );
+  });
+});
+
+const agentSeedInput = $<HTMLInputElement>("agentSeedInput");
+const agentWithHookInput = $<HTMLInputElement>("agentWithHook");
+const agentUseLlmInput = $<HTMLInputElement>("agentUseLlm");
+const agentLlmModelInput = $<HTMLInputElement>("agentLlmModel");
+const agentExportWavBtn = $<HTMLButtonElement>("agentExportWavBtn");
+
+agentUseLlmInput.addEventListener("change", () => {
+  agentLlmModelInput.hidden = !agentUseLlmInput.checked;
+  if (agentUseLlmInput.checked && !agentLlmModelInput.value) {
+    agentLlmModelInput.value = "qwen2.5:7b";
+  }
+});
+
+function formatCriticMetric(name: string, val: number | null, threshold: number | null): string {
+  if (val === null) return "unmeasured";
+  if (name === "clipping") return `peak=${val.toFixed(2)}`;
+  if (name === "gate_clicks") return `jump=${val.toFixed(2)}`;
+  if (name === "grid_adherence") return `${val.toFixed(1)}ms`;
+  if (name === "density") return `${val.toFixed(0)}/${threshold ?? 0}bar`;
+  if (name === "silence") return `rms=${val.toFixed(3)}`;
+  if (name === "diversity") return `rep=${val.toFixed(0)}`;
+  return `${val.toFixed(2)}`;
+}
+
+function renderAgentInspector(out: AgentTriggerOutput) {
+  const res = out.result;
+  if (!res) return;
+
+  const badge = $("criticStatusBadge");
+  badge.classList.remove("pass", "warn");
+  badge.classList.add(res.passed ? "pass" : "warn");
+  badge.textContent = `${res.passed ? "CRITIC PASS" : "CRITIC WARN"} / TRY ${res.attempts.length}/${res.cfg.max_tries} / SEED ${res.seed}`;
+
+  $("agentInspectorSummary").textContent = `CRITIC QA: ${res.passed ? "PASS" : "WARN"} (${res.events.length} EVENTS / ${out.bank?.slices.length ?? 0} SLICES / SEED ${res.seed})`;
+
+  const checksGrid = $("agentCriticChecks");
+  checksGrid.replaceChildren();
+  const lastAttempt = res.attempts[res.attempts.length - 1];
+  if (lastAttempt) {
+    for (const c of lastAttempt.report.checks) {
+      if (c.action === "report") continue;
+      const chip = document.createElement("span");
+      chip.className = `critic-check-chip ${c.passed ? "ok" : "fail"}`;
+      const b = document.createElement("b");
+      b.textContent = c.passed ? "OK" : "WARN";
+      const txt = document.createElement("span");
+      const metricStr = formatCriticMetric(c.name, c.value, c.threshold);
+      txt.textContent = metricStr ? `${c.name} (${metricStr})` : c.name;
+      chip.append(b, txt);
+      checksGrid.append(chip);
+    }
+  }
+
+  const eventsStrip = $("agentEventPills");
+  eventsStrip.replaceChildren();
+  const secPerBeat = 60 / (mixer.info()?.effBpm ?? slots[mixer.active]?.analysis.bpm ?? 124);
+  res.events.forEach((ev, idx) => {
+    const pill = document.createElement("span");
+    pill.className = "event-chip";
+    const beatPos = (ev.t0 / secPerBeat).toFixed(2);
+    pill.innerHTML = `<b>#${idx + 1} ${ev.primitive}</b> @ ${beatPos}B (S${ev.slice_id}, ${ev.n_strokes}x)`;
+    eventsStrip.append(pill);
+  });
+
+  agentExportWavBtn.disabled = false;
+}
+
+async function trigger90sScratchAgent(incrementSeed = false) {
+  if (agentRunning) return;
+  agentRunning = true;
+  const dropBtn = $<HTMLButtonElement>("agentDropBtn");
+  dropBtn.disabled = true;
+  try {
+    await mixer.ctx.resume();
+    let seed = parseInt(agentSeedInput.value || "7", 10);
+    if (Number.isNaN(seed)) seed = 7;
+    if (incrementSeed) {
+      seed += 1;
+      agentSeedInput.value = String(seed);
+    }
+    const out = await mixer.triggerScratchAgent({
+      bars: agentBars,
+      style: agentStyle,
+      placementMode: agentPlacementMode,
+      seed,
+      withHook: agentWithHookInput.checked,
+      useLlm: agentUseLlmInput.checked,
+      llmModel: agentLlmModelInput.value.trim() || undefined,
+    });
+    lastAgentOutput = out;
+    if (out.result) {
+      agentSeedInput.value = String(out.result.seed);
+    }
+    renderAgentInspector(out);
+    toast(`90s Scratch Agent: ${out.message}`);
+  } catch (err) {
+    toast(`90s Scratch Agent error: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    agentRunning = false;
+    dropBtn.disabled = false;
+  }
+}
+
+$("agentDropBtn").addEventListener("click", () => void trigger90sScratchAgent(false));
+$("agentRerollBtn").addEventListener("click", () => void trigger90sScratchAgent(true));
+
+agentExportWavBtn.addEventListener("click", () => {
+  const res = lastAgentOutput?.result;
+  const sr = lastAgentOutput?.sourceBuffer?.sampleRate ?? mixer.ctx.sampleRate;
+  if (!res) return;
+  const pcm = applyHeadroom(res.audio, res.cfg.headroom_db);
+  const wavBytes = encodeWav16(pcm, sr);
+  const blob = new Blob([wavBytes.buffer as ArrayBuffer], { type: "audio/wav" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `90s_scratch_agent_${res.plan.bars}b_${res.plan.style}_seed${res.seed}.wav`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  toast(`Exported 16-bit PCM WAV (Seed ${res.seed})`);
+});
+
 // 3. Render Party Energy Templates
 const partyTemplatesBar = $("partyTemplates");
 function renderPartyTemplates() {
@@ -145,14 +341,14 @@ function renderPartyTemplates() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = `template-btn ${t.id === selectedTemplateId ? "active" : ""}`;
-    btn.textContent = `${t.name} (${t.transition})`;
+    btn.textContent = `${t.name}`;
     btn.addEventListener("click", () => {
       selectedTemplateId = t.id;
       selectedPresetId = t.transition;
       const radio = blendContainer.querySelector<HTMLInputElement>(`input[value="${t.transition}"]`);
       if (radio) radio.checked = true;
       renderPartyTemplates();
-      toast(`Party Template: ${t.name} · Transition set to ${t.transition}`);
+      toast(`Party Preset: ${t.name} (${t.transition} transition)`);
     });
     partyTemplatesBar.append(btn);
   }
@@ -164,10 +360,10 @@ const autoPilotBtn = $<HTMLButtonElement>("autoPilotBtn");
 autoPilotBtn.addEventListener("click", () => {
   autoPilotEnabled = !autoPilotEnabled;
   autoPilotBtn.setAttribute("aria-pressed", String(autoPilotEnabled));
-  autoPilotBtn.textContent = `Auto-DJ Pilot: ${autoPilotEnabled ? "On" : "Off"}`;
+  autoPilotBtn.innerHTML = `<span class="switch-led"></span><span>Auto-DJ: ${autoPilotEnabled ? "On" : "Off"}</span>`;
   toast(
     autoPilotEnabled
-      ? "Auto-DJ Pilot Enabled · Will auto-blend tracks at phrase outro"
+      ? "Auto-DJ Pilot Enabled - Will auto-blend tracks at phrase outro"
       : "Auto-DJ Pilot Disabled"
   );
 });
@@ -186,7 +382,7 @@ $("bpmUpBtn").addEventListener("click", () => {
 $("bpmResetBtn").addEventListener("click", () => {
   const native = slots[mixer.active]?.analysis.bpm ?? 124;
   mixer.setMasterBpm(native);
-  toast(`Master Tempo locked to native ${native.toFixed(1)} BPM`);
+  toast(`Master Tempo synced to ${native.toFixed(1)} BPM`);
 });
 
 // 4. Quantized Hot Cues & Beat Loops
@@ -213,7 +409,7 @@ document.querySelectorAll<HTMLButtonElement>(".loop-btn").forEach(btn => {
     updateLoopButtons(deckIdx);
     toast(
       d.loopBars > 0
-        ? `Deck ${deckIdx === 0 ? "A" : "B"} locked in ${d.loopBars}-bar beat loop`
+        ? `Deck ${deckIdx === 0 ? "A" : "B"} locked in ${d.loopBars}-bar loop`
         : `Deck ${deckIdx === 0 ? "A" : "B"} loop released`
     );
   });
@@ -228,7 +424,7 @@ function updateLoopButtons(deckIdx: 0 | 1) {
       b.classList.toggle("active", activeBars === bars);
     });
   $(deckIdx === 0 ? "loopStatusA" : "loopStatusB").textContent =
-    activeBars > 0 ? `${activeBars} Bar Loop Active` : "Loop Off";
+    activeBars > 0 ? `${activeBars}B ACTIVE` : "OFF";
 }
 
 // 5. 3-Band Isolator EQ, Color Filter & Crossfader Controls
@@ -270,13 +466,13 @@ crossfaderInput.addEventListener("input", () => {
   mixer.setCrossfader(parseFloat(crossfaderInput.value));
 });
 
-// Club FX One-Shot Pads
+// Club FX One-Shot Keys
 document.querySelectorAll<HTMLButtonElement>("[data-fx]").forEach(btn => {
   btn.addEventListener("click", async () => {
     await mixer.ctx.resume();
     const fx = btn.dataset.fx as "dub-siren" | "sub-drop" | "laser-riser" | "vinyl-brake";
     mixer.triggerClubFX(fx);
-    toast(`Triggered FX: ${btn.textContent}`);
+    toast(`Triggered FX: ${btn.title || btn.textContent}`);
   });
 });
 
@@ -312,7 +508,6 @@ function bindInteractivePlatter(platterId: string, deckIdx: 0 | 1) {
     if (dTheta > Math.PI) dTheta -= 2 * Math.PI;
     if (dTheta < -Math.PI) dTheta += 2 * Math.PI;
 
-    // Normal 33.3 RPM = 3.49 rad/sec
     const radPerSec = dTheta / dt;
     const velocity = radPerSec / 3.49;
     platterAngles[deckIdx] += (dTheta * 180) / Math.PI;
@@ -333,10 +528,10 @@ function bindInteractivePlatter(platterId: string, deckIdx: 0 | 1) {
 bindInteractivePlatter("platterA", 0);
 bindInteractivePlatter("platterB", 1);
 
-// 7. Crate & Queue Management
+// 7. Crate & Queue Management (2-Column Hardware Track Cartridges)
 async function loadTrackIntoDeck(slot: 0 | 1, item: CrateTrack) {
   if (mixer.playing && slot === mixer.active && !mixer.busy) {
-    return toast(`Deck ${slot === 0 ? "A" : "B"} is playing live! Load into Deck ${slot === 0 ? "B" : "A"} instead.`);
+    return toast(`Deck ${slot === 0 ? "A" : "B"} is live on air. Load into Deck ${slot === 0 ? "B" : "A"}.`);
   }
   try {
     let analysis = item.analysis;
@@ -355,7 +550,7 @@ async function loadTrackIntoDeck(slot: 0 | 1, item: CrateTrack) {
       analysis,
     };
     updateDeckStaticLabels(slot);
-    renderCrateTable();
+    renderCrateCards();
   } catch {
     toast(`Couldn't decode ${item.name}. Try MP3, WAV, FLAC, or M4A.`);
   }
@@ -366,9 +561,9 @@ function updateDeckStaticLabels(slot: 0 | 1) {
   const prefix = slot === 0 ? "A" : "B";
   if (!m) return;
   $(`deck${prefix}Title`).textContent = m.name;
-  $(`waveLabel${prefix}`).textContent = `${m.name} (${m.analysis.bpm.toFixed(0)} BPM · ${m.analysis.key ?? "8A"})`;
+  $(`waveLabel${prefix}`).textContent = `${m.name} (${m.analysis.bpm.toFixed(0)} BPM)`;
   const energyPct = Math.round((m.analysis.energy ?? 0.8) * 100);
-  $(`deck${prefix}Meta`).textContent = `${m.analysis.bpm.toFixed(1)} BPM · Key ${m.analysis.key ?? "8A"} (${m.analysis.keyName ?? "Minor"}) · Energy ${energyPct}%`;
+  $(`deck${prefix}Meta`).textContent = `${m.analysis.bpm.toFixed(1)} BPM / Key ${m.analysis.key ?? "8A"} / Energy ${energyPct}%`;
 
   if (m.analysis.cuePoints) {
     $(`cueTime${prefix}Intro`).textContent = fmt(m.analysis.cuePoints.intro);
@@ -387,7 +582,7 @@ function renderQueue() {
     const li = document.createElement("li");
     const s = document.createElement("span");
     const b = document.createElement("button");
-    s.textContent = `${item.name} · ${item.analysis.bpm.toFixed(0)} BPM · ${item.analysis.key ?? "8A"}`;
+    s.textContent = `${item.name} (${item.analysis.bpm.toFixed(0)} BPM)`;
     b.textContent = "Remove";
     b.setAttribute("aria-label", `Remove ${item.name}`);
     b.onclick = () => {
@@ -399,39 +594,31 @@ function renderQueue() {
   });
 }
 
-function renderCrateTable() {
-  const tbody = $("crateBody");
-  tbody.replaceChildren();
+function renderCrateCards() {
+  const container = $("crateBody");
+  container.replaceChildren();
   const activeKey = slots[mixer.active]?.analysis.key ?? "8A";
 
   for (const item of crate) {
-    const tr = document.createElement("tr");
+    const card = document.createElement("div");
+    card.className = "crate-card";
+    card.setAttribute("role", "listitem");
+
     const match = evaluateHarmonicMatch(activeKey, item.analysis.key);
-    const energyPct = Math.round((item.analysis.energy ?? 0.78) * 100);
 
-    const tdTitle = document.createElement("td");
-    tdTitle.innerHTML = `<strong>${item.name}</strong>`;
+    const infoDiv = document.createElement("div");
+    infoDiv.className = "crate-card-info";
 
-    const tdGenre = document.createElement("td");
-    tdGenre.textContent = `${item.artist} · ${item.genre}`;
+    const titleEl = document.createElement("div");
+    titleEl.className = "crate-card-title";
+    titleEl.textContent = item.name;
 
-    const tdBpm = document.createElement("td");
-    tdBpm.className = "num-col mono";
-    tdBpm.textContent = item.analysis.bpm.toFixed(1);
+    const metaEl = document.createElement("div");
+    metaEl.className = "crate-card-meta";
+    metaEl.textContent = `${item.analysis.bpm.toFixed(0)} BPM / Key ${item.analysis.key ?? "8A"} / ${match.label}`;
 
-    const tdKey = document.createElement("td");
-    tdKey.className = "mono";
-    tdKey.textContent = `${item.analysis.key ?? "8A"} (${item.analysis.keyName ?? "Minor"})`;
+    infoDiv.append(titleEl, metaEl);
 
-    const tdMatch = document.createElement("td");
-    tdMatch.textContent = match.label;
-
-    const tdEnergy = document.createElement("td");
-    tdEnergy.className = "mono";
-    tdEnergy.textContent = `${energyPct}%`;
-
-    const tdActions = document.createElement("td");
-    tdActions.className = "action-col";
     const actWrap = document.createElement("div");
     actWrap.className = "crate-actions";
 
@@ -465,9 +652,8 @@ function renderCrateTable() {
     };
 
     actWrap.append(btnA, btnB, btnQ);
-    tdActions.append(actWrap);
-    tr.append(tdTitle, tdGenre, tdBpm, tdKey, tdMatch, tdEnergy, tdActions);
-    tbody.append(tr);
+    card.append(infoDiv, actWrap);
+    container.append(card);
   }
 }
 
@@ -493,9 +679,9 @@ async function addFiles(list: FileList | null) {
   const files = Array.from(list ?? []).filter(
     f => f.type.startsWith("audio/") || /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(f.name)
   );
-  if (!files.length) return toast("Those aren't audio files. Try MP3, WAV, FLAC, or M4A.");
+  if (!files.length) return toast("Unsupported file type. Try MP3, WAV, FLAC, or M4A.");
 
-  toast(`Analyzing ${files.length} audio ${files.length === 1 ? "file" : "files"}…`);
+  toast(`Analyzing ${files.length} audio ${files.length === 1 ? "file" : "files"}...`);
   for (const f of files) {
     try {
       const buf = await mixer.ctx.decodeAudioData(await f.arrayBuffer());
@@ -508,8 +694,8 @@ async function addFiles(list: FileList | null) {
       const item: CrateTrack = {
         id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         name: clean(f.name),
-        artist: "Local Audio",
-        genre: "Custom File",
+        artist: "Custom Audio",
+        genre: "User Stem",
         buffer: buf,
         file: f,
         analysis,
@@ -530,10 +716,10 @@ async function addFiles(list: FileList | null) {
       toast(`Couldn't read ${f.name}. Try an MP3, WAV or M4A file.`);
     }
   }
-  renderCrateTable();
+  renderCrateCards();
   renderQueue();
   void fill();
-  toast(`Added ${files.length} track(s) · Beat grid & Camelot key analyzed`);
+  toast(`Added ${files.length} track(s) - Beat grid and Camelot key ready`);
 }
 
 $<HTMLInputElement>("files").addEventListener("change", e => {
@@ -560,7 +746,7 @@ async function triggerPrimaryAction() {
   await mixer.ctx.resume();
   if (!mixer.playing) {
     if (mixer.play()) {
-      toast("Party Started · Beat Grid Locked");
+      toast("Party Started - Beat Grid Locked");
       void fill();
     } else {
       toast("Add a song first");
@@ -574,8 +760,8 @@ async function triggerPrimaryAction() {
   const shiftPct = ((r.rate - 1) * 100).toFixed(1);
   toast(
     r.clamped
-      ? `Smart Mix (${preset.name}) · Wide tempo range clamped`
-      : `Smart Mix (${preset.name}) · ${r.harmonicLabel} · Tempo ${shiftPct}%`
+      ? `Smart Mix (${preset.name}) - Wide tempo range clamped`
+      : `Smart Mix (${preset.name}) - ${r.harmonicLabel} (Tempo ${shiftPct}%)`
   );
 }
 pad.onclick = () => void triggerPrimaryAction();
@@ -590,12 +776,18 @@ $("playPauseToggle").addEventListener("click", async () => {
   }
 });
 
-// Keyboard Shortcuts (Space = Start/Mix, 1-8 = Autoscratch Pads)
+// Keyboard Shortcuts (Space = Start/Mix, G = Drop 90s Agent Cut, R = Reroll Agent, 1-8 = Autoscratch Pads)
 window.addEventListener("keydown", e => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
   if (e.code === "Space") {
     e.preventDefault();
     void triggerPrimaryAction();
+  } else if (e.key === "g" || e.key === "G") {
+    e.preventDefault();
+    void trigger90sScratchAgent(false);
+  } else if (e.key === "r" || e.key === "R") {
+    e.preventDefault();
+    void trigger90sScratchAgent(true);
   } else if (e.key >= "1" && e.key <= "8") {
     const idx = parseInt(e.key, 10) - 1;
     const pat = SCRATCH_PATTERNS[idx];
@@ -633,11 +825,11 @@ function drawParallelWaveforms() {
   const H = waveCanvas.height;
   const halfH = H * 0.5;
 
-  waveCtx.fillStyle = "#07090e";
+  waveCtx.fillStyle = "#05070a";
   waveCtx.fillRect(0, 0, W, H);
 
   // Center horizontal divider between Deck A and Deck B
-  waveCtx.strokeStyle = "rgba(255,255,255,0.12)";
+  waveCtx.strokeStyle = "rgba(255,255,255,0.1)";
   waveCtx.lineWidth = 1;
   waveCtx.beginPath();
   waveCtx.moveTo(0, halfH);
@@ -660,33 +852,34 @@ function drawParallelWaveforms() {
     const n = wf.low.length;
     const barW = W / n;
 
-    // Draw 3-Band Frequency Waveform (Low = Amber/Red, Mid = Emerald, High = Cyan)
+    // Cohesive Warm Amber / Titanium 3-Band Spectrum
     for (let i = 0; i < n; i++) {
       const x = i * barW;
       const played = i / n <= curRatio;
-      const alpha = played ? 0.42 : 0.92;
+      const alpha = played ? 0.35 : 0.9;
 
       const lAmp = wf.low[i] * maxAmp;
-      const mAmp = wf.mid[i] * maxAmp * 0.82;
-      const hAmp = wf.high[i] * maxAmp * 0.6;
+      const mAmp = wf.mid[i] * maxAmp * 0.78;
+      const hAmp = wf.high[i] * maxAmp * 0.55;
 
-      // Low Band (Bass)
+      // Low Band (Warm Amber on Deck A, Cool Silver-Slate on Deck B)
       waveCtx.fillStyle =
-        slot === 0 ? `rgba(245, 158, 11, ${alpha})` : `rgba(6, 182, 212, ${alpha})`;
+        slot === 0 ? `rgba(245, 158, 11, ${alpha})` : `rgba(148, 163, 184, ${alpha})`;
       waveCtx.fillRect(x, centerY - lAmp, Math.max(1.5, barW - 0.5), lAmp * 2);
 
       // Mid Band
-      waveCtx.fillStyle = `rgba(16, 185, 129, ${alpha * 0.75})`;
+      waveCtx.fillStyle =
+        slot === 0 ? `rgba(251, 191, 36, ${alpha * 0.75})` : `rgba(203, 213, 225, ${alpha * 0.75})`;
       waveCtx.fillRect(x, centerY - mAmp, Math.max(1.5, barW - 0.5), mAmp * 2);
 
       // High Band
-      waveCtx.fillStyle = `rgba(244, 246, 251, ${alpha * 0.65})`;
+      waveCtx.fillStyle = `rgba(241, 245, 249, ${alpha * 0.65})`;
       waveCtx.fillRect(x, centerY - hAmp, Math.max(1.5, barW - 0.5), hAmp * 2);
     }
 
     // Draw Bar Grid ticks
     const secPerBar = (60 / meta.analysis.bpm) * 4;
-    waveCtx.strokeStyle = "rgba(255, 255, 255, 0.14)";
+    waveCtx.strokeStyle = "rgba(255, 255, 255, 0.12)";
     waveCtx.lineWidth = 1;
     for (let t = meta.analysis.firstBeat; t < dur; t += secPerBar) {
       const x = (t / dur) * W;
@@ -696,24 +889,24 @@ function drawParallelWaveforms() {
       waveCtx.stroke();
     }
 
-    // Draw Cue Flags (Intro, Drop, Break, Outro)
+    // Draw Cue Flags (IN, DROP, BRK, OUT)
     if (meta.analysis.cuePoints) {
-      const cues: Array<[string, number, string]> = [
-        ["IN", meta.analysis.cuePoints.intro, "#10b981"],
-        ["DROP", meta.analysis.cuePoints.drop, "#f59e0b"],
-        ["BRK", meta.analysis.cuePoints.breakdown, "#06b6d4"],
-        ["OUT", meta.analysis.cuePoints.outro, "#ef4444"],
+      const cues: Array<[string, number]> = [
+        ["IN", meta.analysis.cuePoints.intro],
+        ["DROP", meta.analysis.cuePoints.drop],
+        ["BRK", meta.analysis.cuePoints.breakdown],
+        ["OUT", meta.analysis.cuePoints.outro],
       ];
-      waveCtx.font = "600 10px 'JetBrains Mono', monospace";
-      for (const [label, sec, color] of cues) {
+      waveCtx.font = "600 9px 'JetBrains Mono', monospace";
+      for (const [label, sec] of cues) {
         const cx = (sec / dur) * W;
-        waveCtx.strokeStyle = color;
+        waveCtx.strokeStyle = "rgba(251, 191, 36, 0.75)";
         waveCtx.beginPath();
         waveCtx.moveTo(cx, topY);
         waveCtx.lineTo(cx, topY + halfH);
         waveCtx.stroke();
-        waveCtx.fillStyle = color;
-        waveCtx.fillText(label, cx + 3, topY + 12);
+        waveCtx.fillStyle = "#fbbf24";
+        waveCtx.fillText(label, cx + 3, topY + 10);
       }
     }
 
@@ -728,14 +921,101 @@ function drawParallelWaveforms() {
   }
 }
 
+const PRIMITIVE_COLORS: Record<string, string> = {
+  baby: "#f59e0b",
+  stab: "#fbbf24",
+  cut_forward: "#38bdf8",
+  transform: "#c084fc",
+  rest: "#64748b",
+};
+
 function drawScratchScope(telemetry: ReturnType<typeof mixer.scratchTelemetry>) {
   const W = scopeCanvas.width;
   const H = scopeCanvas.height;
-  scopeCtx.fillStyle = "#07090e";
+  scopeCtx.fillStyle = "#07090d";
   scopeCtx.fillRect(0, 0, W, H);
 
-  // Center zero-displacement reference line
-  scopeCtx.strokeStyle = "rgba(255,255,255,0.12)";
+  const showAgentTimeline =
+    lastAgentOutput?.result &&
+    (telemetry.patternId === "agent" || !telemetry.active);
+
+  if (showAgentTimeline && lastAgentOutput?.result) {
+    const res = lastAgentOutput.result;
+    const bpm = mixer.info()?.effBpm ?? slots[mixer.active]?.analysis.bpm ?? 124;
+    const totalSec = res.plan.bars * 4 * (60 / bpm);
+
+    // Center line
+    scopeCtx.strokeStyle = "rgba(255,255,255,0.08)";
+    scopeCtx.lineWidth = 1;
+    scopeCtx.beginPath();
+    scopeCtx.moveTo(0, H * 0.5);
+    scopeCtx.lineTo(W, H * 0.5);
+    scopeCtx.stroke();
+
+    // Beat grid lines across the phrase
+    const totalBeats = res.plan.bars * 4;
+    for (let b = 0; b <= totalBeats; b++) {
+      const x = (b / totalBeats) * W;
+      const isBar = b % 4 === 0;
+      scopeCtx.strokeStyle = isBar ? "rgba(251, 191, 36, 0.32)" : "rgba(255, 255, 255, 0.09)";
+      scopeCtx.lineWidth = isBar ? 1.5 : 1;
+      scopeCtx.beginPath();
+      scopeCtx.moveTo(x, 0);
+      scopeCtx.lineTo(x, H);
+      scopeCtx.stroke();
+    }
+
+    // Placed 90s ScratchEvent blocks (baby, stab, cut_forward, transform)
+    scopeCtx.font = "600 8px 'JetBrains Mono', monospace";
+    for (const ev of res.events) {
+      const x0 = (ev.t0 / totalSec) * W;
+      const dur = ev.n_strokes * ev.stroke_T;
+      const w = Math.max(4, (dur / totalSec) * W);
+      const col = PRIMITIVE_COLORS[ev.primitive] ?? "#f59e0b";
+      scopeCtx.fillStyle = `${col}2e`;
+      scopeCtx.strokeStyle = col;
+      scopeCtx.lineWidth = 1;
+      scopeCtx.fillRect(x0, 3, w, H - 6);
+      scopeCtx.strokeRect(x0, 3, w, H - 6);
+      if (w > 24) {
+        scopeCtx.fillStyle = "#f8fafc";
+        scopeCtx.fillText(ev.primitive.slice(0, 5).toUpperCase(), x0 + 3, 12);
+      }
+    }
+
+    // Rendered Kaiser-windowed sinc scratch audio waveform overlay
+    const audio = res.audio;
+    const step = Math.max(1, Math.floor(audio.length / W));
+    scopeCtx.strokeStyle = telemetry.active ? "#fbbf24" : "#f59e0b";
+    scopeCtx.lineWidth = 1.3;
+    scopeCtx.beginPath();
+    for (let px = 0; px < W; px++) {
+      let pk = 0;
+      const base = px * step;
+      for (let j = 0; j < step && base + j < audio.length; j++) {
+        const v = audio[base + j];
+        if (Math.abs(v) > Math.abs(pk)) pk = v;
+      }
+      const y = H * 0.55 - Math.max(-1, Math.min(1, pk)) * (H * 0.36);
+      if (px === 0) scopeCtx.moveTo(px, y);
+      else scopeCtx.lineTo(px, y);
+    }
+    scopeCtx.stroke();
+
+    // Live playhead needle when active
+    if (telemetry.active) {
+      const cx = telemetry.progress * W;
+      scopeCtx.strokeStyle = "#ffffff";
+      scopeCtx.lineWidth = 1.8;
+      scopeCtx.beginPath();
+      scopeCtx.moveTo(cx, 0);
+      scopeCtx.lineTo(cx, H);
+      scopeCtx.stroke();
+    }
+    return;
+  }
+
+  scopeCtx.strokeStyle = "rgba(255,255,255,0.1)";
   scopeCtx.lineWidth = 1;
   scopeCtx.beginPath();
   scopeCtx.moveTo(0, H * 0.5);
@@ -746,17 +1026,17 @@ function drawScratchScope(telemetry: ReturnType<typeof mixer.scratchTelemetry>) 
   const gate = telemetry.gateSamples;
   const len = curve.length;
 
-  // Draw VCA Crossfader Gate blocks along the bottom
+  // VCA Gate Bar along bottom
   for (let i = 0; i < len; i++) {
     const x = (i / len) * W;
     const g = gate[i];
-    scopeCtx.fillStyle = g > 0.25 ? "rgba(16, 185, 129, 0.22)" : "rgba(239, 68, 68, 0.18)";
-    scopeCtx.fillRect(x, H - 10, W / len + 0.5, 10);
+    scopeCtx.fillStyle = g > 0.25 ? "rgba(245, 158, 11, 0.22)" : "rgba(100, 116, 139, 0.12)";
+    scopeCtx.fillRect(x, H - 7, W / len + 0.5, 7);
   }
 
-  // Draw Vinyl Platter Displacement Trajectory
-  scopeCtx.strokeStyle = telemetry.active ? "#f59e0b" : "#06b6d4";
-  scopeCtx.lineWidth = 2;
+  // Vinyl Platter Displacement Trajectory
+  scopeCtx.strokeStyle = telemetry.active ? "#fbbf24" : "#94a3b8";
+  scopeCtx.lineWidth = 1.8;
   scopeCtx.beginPath();
   for (let i = 0; i < len; i++) {
     const x = (i / (len - 1)) * W;
@@ -766,7 +1046,6 @@ function drawScratchScope(telemetry: ReturnType<typeof mixer.scratchTelemetry>) 
   }
   scopeCtx.stroke();
 
-  // Draw live progress cursor if scratch is active
   if (telemetry.active) {
     const cx = telemetry.progress * W;
     scopeCtx.strokeStyle = "#ffffff";
@@ -778,7 +1057,7 @@ function drawScratchScope(telemetry: ReturnType<typeof mixer.scratchTelemetry>) 
   }
 }
 
-// 11. Initialize Built-In Studio Crate so app is immediately playable
+// 11. Initialize Built-In Studio Crate
 function bootstrapStudioCrate() {
   for (const spec of BUILTIN_TRACK_SPECS) {
     const buf = synthesizeStudioTrack(mixer.ctx, spec);
@@ -792,7 +1071,6 @@ function bootstrapStudioCrate() {
         keyName: spec.keyName,
       });
     } else {
-      // Load into idle temporarily to analyze then restore
       analysis = {
         ...mixer.loadBuffer(1, buf, {
           bpm: spec.bpm,
@@ -813,7 +1091,6 @@ function bootstrapStudioCrate() {
     crate.push(item);
   }
 
-  // Ensure Deck A has Track 0, Deck B has Track 1, and Queue has Tracks 2 & 3
   if (crate[0]?.buffer) {
     const a0 = mixer.loadBuffer(0, crate[0].buffer, crate[0].analysis);
     slots[0] = {
@@ -837,7 +1114,7 @@ function bootstrapStudioCrate() {
     updateDeckStaticLabels(1);
   }
   queue.push(...crate.slice(2));
-  renderCrateTable();
+  renderCrateCards();
   renderQueue();
 }
 bootstrapStudioCrate();
@@ -853,39 +1130,36 @@ function tick(nowPerf = performance.now()) {
 
   const scratch = mixer.scratchTelemetry();
 
-  // Update Active Master Summary & Legacy IDs
   const shown = info ? slots[info.deck] : slots[0];
   const nextSlot = slots[mixer.idle];
   $("title").textContent = shown?.name ?? "Nothing playing yet";
   $("meta").textContent = info
-    ? `${info.effBpm.toFixed(1)} BPM · Key ${shown?.analysis.key ?? "8A"} (${shown?.analysis.keyName ?? "Minor"})`
+    ? `${info.effBpm.toFixed(1)} BPM / Key ${shown?.analysis.key ?? "8A"} (${shown?.analysis.keyName ?? "Minor"})`
     : shown
-      ? `${shown.analysis.bpm.toFixed(1)} BPM · Key ${shown.analysis.key ?? "8A"}, ready to start`
-      : "Add songs below to get started";
+      ? `${shown.analysis.bpm.toFixed(1)} BPM / Key ${shown.analysis.key ?? "8A"} Ready`
+      : "Load audio below to start";
 
   $("fill").style.width = info ? `${(info.elapsed / info.duration) * 100}%` : "0%";
   $("elapsed").textContent = fmt(info?.elapsed ?? 0);
   $("left").textContent = `-${fmt(info?.remaining ?? 0)}`;
   $("ring").style.strokeDashoffset = String(RING * (1 - (info?.fade ?? 0)));
 
-  // Master Telemetry Bar
   const masterBpm = info?.effBpm ?? shown?.analysis.bpm ?? 124;
   $("masterBpmReadout").textContent = `${masterBpm.toFixed(1)} BPM`;
   const match = evaluateHarmonicMatch(shown?.analysis.key, nextSlot?.analysis.key);
-  $("harmonicReadout").textContent = match.label;
+  $("harmonicReadout").textContent = match.label.replace("→", "to");
 
   if (info) {
     const barNum = Math.floor(info.elapsed / ((60 / info.effBpm) * 4)) + 1;
-    $("beatCountReadout").textContent = `Bar ${barNum} · Beat ${info.beatInBar + 1}`;
+    $("beatCountReadout").textContent = `Bar ${barNum} / Beat ${info.beatInBar + 1}`;
     $("phraseCountdown").textContent = mixer.busy
-      ? `Blending ${Math.round(info.fade * 100)}%`
-      : `Next bar window in ${info.nextBarIn.toFixed(1)}s`;
+      ? `BLENDING ${Math.round(info.fade * 100)}%`
+      : `NEXT BAR IN ${info.nextBarIn.toFixed(1)}S`;
   } else {
-    $("beatCountReadout").textContent = "Bar 1 · Beat 1";
-    $("phraseCountdown").textContent = "Quantized bar-sync armed";
+    $("beatCountReadout").textContent = "Bar 1 / Beat 1";
+    $("phraseCountdown").textContent = "BAR SYNC READY";
   }
 
-  // Update Deck A & Deck B Time & Platter Physics
   for (let slot = 0 as 0 | 1; slot <= 1; slot = (slot + 1) as 0 | 1) {
     const d = mixer.decks[slot];
     const prefix = slot === 0 ? "A" : "B";
@@ -896,14 +1170,13 @@ function tick(nowPerf = performance.now()) {
 
     const isMaster = mixer.active === slot;
     $(`deck${prefix}StatusText`).textContent = mixer.busy
-      ? "Transitioning"
+      ? "MIXING"
       : isMaster
         ? playing
-          ? "On Air · Master"
-          : "Ready · Master"
-        : "Cued · Sync Locked";
+          ? "ON AIR"
+          : "MASTER"
+        : "CUED";
 
-    // Platter angular velocity (33.33 RPM = 200 deg/sec at 1.0x)
     let platterSpeed = 0;
     if (scratch.active && scratch.deck === slot) {
       platterSpeed = scratch.velocity;
@@ -922,37 +1195,33 @@ function tick(nowPerf = performance.now()) {
           ? `${(33.3 * platterSpeed).toFixed(1)} RPM`
           : "CUED";
 
-    // VU Meter
     const level = d.getLevel();
     const vuFill = $(`vuFill${prefix}`);
     vuFill.style.height = `${Math.max(6, Math.round(level * 100))}%`;
   }
 
-  // Update Crossfader UI during automated blends
   if (mixer.busy) {
     crossfaderInput.value = mixer.crossfader.toFixed(2);
   }
 
-  // Update Smart Mix Pad & Up Next status
   if (!mixer.playing) {
     pad.disabled = !slots[0];
-    $("padlabel").textContent = slots[0] ? "Start Party" : "Add Songs";
-    $("upnext").textContent = slots[1] ? `Up next: ${slots[1].name} (${slots[1].analysis.bpm.toFixed(0)} BPM)` : "";
+    $("padlabel").textContent = slots[0] ? "START PARTY" : "ADD SONGS";
+    $("upnext").textContent = slots[1] ? `Next: ${slots[1].name}` : "";
   } else if (mixer.busy) {
     pad.disabled = true;
-    $("padlabel").textContent = "Mixing…";
-    $("upnext").textContent = `Blending into ${slots[mixer.active]?.name ?? "Next Track"}`;
+    $("padlabel").textContent = "MIXING";
+    $("upnext").textContent = `Into ${slots[mixer.active]?.name ?? "Next Track"}`;
   } else {
     pad.disabled = !nextSlot;
-    $("padlabel").textContent = "Smart Mix Next";
+    $("padlabel").textContent = "SMART MIX";
     $("upnext").textContent = nextSlot
-      ? `Up next: ${nextSlot.name} (${nextSlot.analysis.bpm.toFixed(0)} BPM · ${nextSlot.analysis.key ?? "8A"})`
+      ? `Next: ${nextSlot.name} (${nextSlot.analysis.bpm.toFixed(0)} BPM)`
       : queue.length || loading
-        ? "Loading next track…"
-        : "Select a track from Crate to mix into";
+        ? "Loading next..."
+        : "Pick track below";
   }
 
-  // Auto-DJ Party Pilot: Automatically trigger phrase-aligned transition at track outro
   if (autoPilotEnabled && info && !mixer.busy && nextSlot) {
     const activeCueOutro = shown?.analysis.cuePoints?.outro ?? info.duration - 12;
     if (info.elapsed >= activeCueOutro || info.remaining <= 10) {
@@ -965,28 +1234,27 @@ function tick(nowPerf = performance.now()) {
     }
   }
 
-  // When a transition finishes, replenish the newly idle deck from the queue (or cycle crate)
   if (freePending && !mixer.busy) {
     slots[mixer.idle] = undefined;
     freePending = false;
     if (queue.length === 0 && crate.length > 1) {
-      // Auto-replenish queue from crate so non-DJs never run out of music
       const nextCrateTrack = crate.find(c => c.id !== slots[mixer.active]?.id) ?? crate[0];
       queue.push(nextCrateTrack);
     }
     void fill();
   }
 
-  // Update Autoscratch UI & Oscilloscope
   document.querySelectorAll<HTMLButtonElement>(".scratch-pad-btn").forEach(btn => {
     btn.classList.toggle("active", scratch.active && btn.dataset.scratchId === scratch.patternId);
   });
   $("gateDot").classList.toggle("cut", !scratch.faderOpen);
-  $("faderGateText").textContent = scratch.faderOpen ? "FADER OPEN" : "FADER CUT";
+  $("faderGateText").textContent = scratch.faderOpen ? "GATE OPEN" : "GATE CUT";
   $("activeScratchName").textContent = scratch.active
-    ? `Active: ${scratch.patternName} · Gate ${Math.round(scratch.faderGain * 100)}%`
-    : "Trajectory Scope · Ready (Click 1–8 or drag turntable platter)";
-  $("activeScratchVel").textContent = `Platter: ${scratch.velocity >= 0 ? "+" : ""}${scratch.velocity.toFixed(2)}x`;
+    ? `${scratch.patternName} (Gate ${Math.round(scratch.faderGain * 100)}%)`
+    : lastAgentOutput?.result
+      ? `90s Agent (${lastAgentOutput.result.plan.bars}B ${lastAgentOutput.result.plan.style.toUpperCase()} / ${lastAgentOutput.result.events.length} events)`
+      : "90s Agent Ready (Press DROP 90S CUT, Key G, or Keys 1-8)";
+  $("activeScratchVel").textContent = `${scratch.velocity >= 0 ? "+" : ""}${scratch.velocity.toFixed(2)}x`;
 
   drawParallelWaveforms();
   drawScratchScope(scratch);

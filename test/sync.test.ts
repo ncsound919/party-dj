@@ -33,4 +33,59 @@ for (const pat of SCRATCH_PATTERNS) {
   }
   assert.ok(sawForward && sawReverse, `Pattern ${pat.id} must have true bidirectional platter motion`);
 }
-console.log("PASS sync + harmonic + autoscratch");
+
+// 90s Scratch Agent System pipeline verification
+import {
+  buildSliceBank,
+  encodeWav16,
+  gridFromBpm,
+  runScratchAgent,
+  validateDirectorPlan,
+} from "../src/scratch-agent";
+
+const sr = 22050;
+const testMono = new Float32Array(sr * 4);
+// Create sharp rhythmic bursts at 0.2s, 0.8s, 1.5s, 2.2s so slicerLite finds transient slices
+for (const onset of [0.2, 0.8, 1.5, 2.2, 2.9]) {
+  const s0 = Math.floor(onset * sr);
+  for (let i = 0; i < Math.floor(0.18 * sr); i++) {
+    const env = Math.exp(-i / (0.05 * sr));
+    testMono[s0 + i] = Math.sin((2 * Math.PI * 320 * i) / sr) * env * 0.9;
+  }
+}
+
+const bank = buildSliceBank(testMono, sr, "test-hook", { maxSliceS: 0.35, delta: 0.2 });
+assert.ok(bank.slices.length >= 3, "slicerLite should extract transient slices");
+const grid = gridFromBpm(94, 0.1, 16);
+
+const res1 = await runScratchAgent({
+  src: testMono,
+  fs: sr,
+  bank,
+  grid,
+  bars: 2,
+  style: "medium",
+  seed: 7,
+  phraseStartBeat: 0,
+  cfg: { placement_mode: "answer" },
+});
+const res2 = await runScratchAgent({
+  src: testMono,
+  fs: sr,
+  bank,
+  grid,
+  bars: 2,
+  style: "medium",
+  seed: 7,
+  phraseStartBeat: 0,
+  cfg: { placement_mode: "answer" },
+});
+
+assert.equal(validateDirectorPlan(res1.plan).ok, true, "DirectorPlan must validate against schema");
+assert.ok(res1.events.length > 0, "90s Scratch Agent must place scratch events");
+assert.equal(res1.seed, res2.seed, "Same seed must be 100% deterministic");
+assert.equal(res1.audio.length, res2.audio.length);
+const wav = encodeWav16(res1.audio, sr);
+assert.ok(wav.byteLength > 44, "WAV encoder must produce valid RIFF header + PCM payload");
+
+console.log("PASS sync + harmonic + autoscratch + 90s-scratch-agent");

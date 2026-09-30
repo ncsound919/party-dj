@@ -8,6 +8,20 @@ import {
   renderScratchBuffer,
   SCRATCH_PATTERNS,
 } from "./scratch";
+import {
+  applyHeadroom,
+  buildSliceBank,
+  gridFromBpm,
+  llmDirector,
+  rulesDirectorFn,
+  runScratchAgent,
+} from "../scratch-agent";
+import type {
+  DirectorFn,
+  RunResult,
+  SliceBank,
+  Style,
+} from "../scratch-agent";
 import type {
   ScratchPatternId,
   ScratchSourceMode,
@@ -20,7 +34,46 @@ export type NextResult =
   | { ok: true; rate: number; clamped: boolean; harmonicLabel: string }
   | { ok: false; reason: string };
 
-/** Two pro decks + Smart Transition Engine + Bidirectional Turntable Autoscratch. */
+export interface AgentTriggerOptions {
+  bars: 2 | 4;
+  style: Style;
+  placementMode: "hook" | "answer";
+  seed: number;
+  startBar?: number;
+  withHook?: boolean;
+  useLlm?: boolean;
+  llmUrl?: string;
+  llmModel?: string;
+}
+
+export interface AgentTriggerOutput {
+  ok: boolean;
+  message: string;
+  result?: RunResult;
+  bank?: SliceBank;
+  sourceBuffer?: AudioBuffer;
+  scratchBuffer?: AudioBuffer;
+}
+
+/** Downmixes an AudioBuffer to peak-normalized mono Float32Array (gate-click threshold assumes peak 1). */
+function extractNormalizedMono(b: AudioBuffer): Float32Array {
+  const out = new Float32Array(b.length);
+  for (let c = 0; c < b.numberOfChannels; c++) {
+    const ch = b.getChannelData(c);
+    for (let i = 0; i < b.length; i++) out[i] += ch[i] / b.numberOfChannels;
+  }
+  let peak = 0;
+  for (let i = 0; i < out.length; i++) {
+    const abs = Math.abs(out[i]);
+    if (abs > peak) peak = abs;
+  }
+  if (peak > 0) {
+    for (let i = 0; i < out.length; i++) out[i] /= peak;
+  }
+  return out;
+}
+
+/** Two pro decks + Smart Transition Engine + 90s Scratch Agent System + Turntable Autoscratch. */
 export class Mixer {
   ctx = new AudioContext();
   masterGain = this.ctx.createGain();
@@ -37,14 +90,14 @@ export class Mixer {
   // Crossfader (-1 = Deck A, 0 = Center, +1 = Deck B)
   crossfader = -1;
 
-  // Autoscratch state
-  scratchSourceMode: ScratchSourceMode = "slip";
-  scratchIntensity = 1.0; // 0.5 (Subtle), 1.0 (Club), 1.35 (Turntablist)
+  // Scratch state
+  scratchSourceMode: ScratchSourceMode = "cut";
+  scratchIntensity = 1.0;
   private cutSampleBuffer?: AudioBuffer;
   private scratchNode?: AudioBufferSourceNode;
   private scratchGain: GainNode;
   private activeScratch: {
-    patternId: ScratchPatternId;
+    patternId: ScratchPatternId | "agent";
     patternName: string;
     deck: 0 | 1;
     startAt: number;
@@ -87,6 +140,171 @@ export class Mixer {
     return this.ctx.currentTime < this.busyUntil;
   }
 
+  /** Returns the currently selected scratch source buffer (90s Battle Hook, Active Deck, or Incoming Deck). */
+  getScratchSourceBuffer(): { buffer: AudioBuffer; bpm: number; firstBeat: number; targetDeck: 0 | 1 } {
+    if (!this.cutSampleBuffer) {
+      this.cutSampleBuffer = createTurntablistCutBuffer(this.ctx);
+    }
+    const activeDeckIdx = this.active as 0 | 1;
+    const activeDeck = this.decks[activeDeckIdx];
+    const idleDeck = this.decks[this.idle];
+    const effBpm = this.playing ? this.effBpm : activeDeck.analysis?.bpm ?? 94;
+
+    if (this.scratchSourceMode === "slip" && activeDeck.buffer) {
+      return {
+        buffer: activeDeck.buffer,
+        bpm: effBpm,
+        firstBeat: activeDeck.analysis?.firstBeat ?? 0,
+        targetDeck: activeDeckIdx,
+      };
+    }
+    if (this.scratchSourceMode === "incoming" && idleDeck.buffer) {
+      return {
+        buffer: idleDeck.buffer,
+        bpm: effBpm,
+        firstBeat: idleDeck.analysis?.firstBeat ?? 0,
+        targetDeck: this.idle,
+      };
+    }
+    return {
+      buffer: this.cutSampleBuffer,
+      bpm: effBpm,
+      firstBeat: 0.08,
+      targetDeck: activeDeckIdx,
+    };
+  }
+
+  /**
+   * Executes the deterministic 90s Scratch Agent pipeline (`slicerLite` -> `rulesDirector`/`llmDirector`
+   * -> `compose` -> Kaiser-windowed sinc `renderTimeline` -> `evaluate` Critic reroll loop) and schedules
+   * the resulting scratch performance onto the live mixer timeline.
+   */
+  async triggerScratchAgent(opts: AgentTriggerOptions): Promise<AgentTriggerOutput> {
+    const { buffer: sourceBuf, bpm, firstBeat, targetDeck } = this.getScratchSourceBuffer();
+    const srcMono = extractNormalizedMono(sourceBuf);
+    // Use maxSliceS: 0.35 so transient slices sit cleanly inside the 0.08s..0.40s Director window
+    let bank = buildSliceBank(srcMono, sourceBuf.sampleRate, "hook-source", {
+      maxSliceS: 0.35,
+      minGapS: 0.06,
+      delta: 0.22,
+    });
+
+    // Fallback synthetic transient slices if user loaded a pure sine/pad with no sharp transients
+    if (bank.slices.filter(s => s.end - s.start >= 0.08 && s.end - s.start <= 0.4).length === 0) {
+      const fallbackSlices = [];
+      const dur = sourceBuf.duration;
+      for (let i = 0; i < 8; i++) {
+        const st = Math.min(dur - 0.3, 0.1 + i * 0.32);
+        if (st > 0 && st + 0.22 < dur) {
+          fallbackSlices.push({
+            id: i,
+            start: st,
+            end: st + 0.22,
+            kind: "transient" as const,
+            text: null,
+            energy: +(0.95 - i * 0.08).toFixed(3),
+          });
+        }
+      }
+      bank = { ...bank, slices: fallbackSlices };
+    }
+
+    const grid = gridFromBpm(bpm, firstBeat, Math.max(sourceBuf.duration, 16));
+    const director: DirectorFn =
+      opts.useLlm && opts.llmModel
+        ? async (c, s) =>
+            (
+              await llmDirector(c, {
+                llm_url: opts.llmUrl || "http://localhost:11434/v1/chat/completions",
+                llm_model: opts.llmModel!,
+                temperature: 0.7,
+                seed: s,
+              })
+            ).plan
+        : rulesDirectorFn;
+
+    const phraseStartBeat = (opts.startBar ?? 0) * 4;
+    const res = await runScratchAgent({
+      src: srcMono,
+      fs: sourceBuf.sampleRate,
+      bank,
+      grid,
+      bars: opts.bars,
+      style: opts.style,
+      seed: opts.seed,
+      director,
+      phraseStartBeat,
+      cfg: { placement_mode: opts.placementMode },
+    });
+
+    const pcm = applyHeadroom(res.audio, res.cfg.headroom_db);
+    const outBuf = this.ctx.createBuffer(1, pcm.length, sourceBuf.sampleRate);
+    outBuf.copyToChannel(pcm, 0);
+
+    // Build 128-point telemetry preview from the rendered scratch audio & events
+    const curveSamples = new Float32Array(128);
+    const gateSamples = new Float32Array(128);
+    const step = Math.max(1, Math.floor(pcm.length / 128));
+    for (let i = 0; i < 128; i++) {
+      let pk = 0;
+      for (let j = 0; j < step; j++) {
+        const v = pcm[i * step + j] ?? 0;
+        if (Math.abs(v) > Math.abs(pk)) pk = v;
+      }
+      curveSamples[i] = pk;
+      gateSamples[i] = Math.abs(pk) > 0.02 ? 1 : 0;
+    }
+
+    this.stopScratch();
+    const now = this.ctx.currentTime;
+    const secPerBeat = 60 / bpm;
+    const startAt = this.playing
+      ? nextBeatTime(now, this.anchor, secPerBeat * 0.5, 0.025)
+      : now + 0.03;
+    const phraseDur = opts.bars * 4 * secPerBeat;
+    const endAt = startAt + phraseDur;
+
+    // If playing over hook is disabled (or in Slip mode), duck the active deck during the agent phrase
+    const activeDeck = this.decks[this.active];
+    if (this.playing && (!opts.withHook || this.scratchSourceMode === "slip") && !this.busy) {
+      const duckGain = opts.withHook ? 0.32 : 0.05;
+      activeDeck.out.gain.cancelScheduledValues(startAt);
+      activeDeck.out.gain.setValueAtTime(1, Math.max(now, startAt - 0.005));
+      activeDeck.out.gain.linearRampToValueAtTime(duckGain, startAt + 0.015);
+      activeDeck.out.gain.setValueAtTime(duckGain, endAt - 0.015);
+      activeDeck.out.gain.linearRampToValueAtTime(1.0, endAt + 0.01);
+    }
+
+    const srcNode = this.ctx.createBufferSource();
+    srcNode.buffer = outBuf;
+    srcNode.connect(this.scratchGain);
+    srcNode.start(startAt);
+    srcNode.stop(endAt + res.cfg.tail_s);
+    this.scratchNode = srcNode;
+
+    this.activeScratch = {
+      patternId: "agent",
+      patternName: `90s Agent (${opts.bars}B ${opts.style} · Seed ${res.seed})`,
+      deck: targetDeck,
+      startAt,
+      endAt,
+      totalBeats: opts.bars * 4,
+      secPerBeat,
+      curveSamples,
+      gateSamples,
+    };
+
+    const statusTag = res.passed ? "Critic PASS" : "Critic WARN";
+    return {
+      ok: true,
+      message: `${statusTag} (Try ${res.attempts.length}/${res.cfg.max_tries}, Seed ${res.seed}) - ${res.events.length} events @ ${bpm.toFixed(0)} BPM`,
+      result: res,
+      bank,
+      sourceBuffer: sourceBuf,
+      scratchBuffer: outBuf,
+    };
+  }
+
   /** Live playback info for the UI (null before Start). */
   info() {
     if (!this.playing) return null;
@@ -111,7 +329,6 @@ export class Mixer {
     const beatInBar = Math.floor(beatFloat) % 4;
     const nextBarIn = Math.max(0, nextBarTime(now, anchor, secPerBar, 0.02) - now);
 
-    // Update automated crossfader position during transitions
     if (now >= this.fadeStart && now < this.busyUntil) {
       const targetPos = this.active === 0 ? -1 : 1;
       const startPos = -targetPos;
@@ -179,8 +396,7 @@ export class Mixer {
     this.crossfader = Math.max(-1, Math.min(1, pos));
     if (!this.playing || this.busy) return;
     const now = this.ctx.currentTime;
-    // Equal-power crossfade law
-    const norm = (this.crossfader + 1) * 0.5; // 0 (Deck A) .. 1 (Deck B)
+    const norm = (this.crossfader + 1) * 0.5;
     const gainA = Math.cos((norm * Math.PI) / 2);
     const gainB = Math.sin((norm * Math.PI) / 2);
     this.decks[0].out.gain.setTargetAtTime(gainA, now, 0.015);
@@ -193,7 +409,6 @@ export class Mixer {
     if (!d.buffer || !d.analysis) return;
     const clamped = Math.max(0, Math.min(d.buffer.duration - 0.2, targetSeconds));
     const secPerBeat = 60 / d.analysis.bpm;
-    // Snap to nearest beat on the track's own grid
     const beatIdx = Math.round((clamped - d.analysis.firstBeat) / secPerBeat);
     const snappedOffset = Math.max(0, d.analysis.firstBeat + beatIdx * secPerBeat);
 
@@ -232,10 +447,9 @@ export class Mixer {
     if (this.ctx.currentTime < this.busyUntil) return { ok: false, reason: "Transition already in progress" };
 
     const { rate, effBpm, clamped } = pickRate(this.effBpm, to.analysis.bpm);
-    const secPerBar = (60 / this.effBpm) * 4; // bar length as heard on the outgoing deck
+    const secPerBar = (60 / this.effBpm) * 4;
     const startAt = nextBarTime(this.ctx.currentTime, this.anchor, secPerBar);
 
-    // Clear stale automation from earlier transitions before scheduling new ones
     for (const p of [from.out.gain, to.out.gain, from.filter.frequency, to.filter.frequency]) {
       p.cancelScheduledValues(0);
     }
@@ -243,7 +457,6 @@ export class Mixer {
     to.filter.frequency.setValueAtTime(10, this.ctx.currentTime);
     from.out.gain.setValueAtTime(1, this.ctx.currentTime);
 
-    // Start incoming track at its Intro or firstBeat
     const startOffset = to.analysis.cuePoints?.intro ?? to.analysis.firstBeat;
     to.start(startAt, startOffset, rate);
     const end = runTransition(from, to, preset, startAt, secPerBar);
@@ -261,9 +474,7 @@ export class Mixer {
   }
 
   /**
-   * Triggers a beat-quantized bidirectional Autoscratch routine.
-   * Supports Slip-Mode (scratches the active deck's live audio and drops back onto the beat grid)
-   * or Cut-Over Mode (scratches a classic turntablist cut or incoming deck over the beat).
+   * Triggers a beat-quantized bidirectional Autoscratch routine (Pads 1-8).
    */
   triggerAutoscratch(patternId: ScratchPatternId): { ok: boolean; message: string } {
     const activeDeckIdx = this.active as 0 | 1;
@@ -274,7 +485,6 @@ export class Mixer {
       this.cutSampleBuffer = createTurntablistCutBuffer(this.ctx);
     }
 
-    // Auto-start playback if not yet playing and Deck A is loaded
     if (!this.playing && activeDeck.buffer) {
       this.play();
     }
@@ -284,14 +494,12 @@ export class Mixer {
     const secPerBeat = 60 / effBpm;
     const pattern = SCRATCH_PATTERNS.find(p => p.id === patternId) ?? SCRATCH_PATTERNS[0];
 
-    // Quantize scratch start to nearest 1/2 beat (within ~40ms..220ms) for immediate tactile response
     const startAt = this.playing
       ? nextBeatTime(now, this.anchor, secPerBeat * 0.5, 0.025)
       : now + 0.02;
 
-    // Choose source audio buffer & anchor offset
     let sourceBuf: AudioBuffer = this.cutSampleBuffer;
-    let sourceAnchorSec = 0.12;
+    let sourceAnchorSec = 0.42;
     let targetDeckIdx: 0 | 1 = activeDeckIdx;
 
     if (this.scratchSourceMode === "slip" && activeDeck.buffer) {
@@ -304,7 +512,7 @@ export class Mixer {
       targetDeckIdx = this.idle;
     } else {
       sourceBuf = this.cutSampleBuffer;
-      sourceAnchorSec = 0.12;
+      sourceAnchorSec = 0.42;
       targetDeckIdx = activeDeckIdx;
     }
 
@@ -322,8 +530,6 @@ export class Mixer {
 
     const endAt = startAt + rendered.duration;
 
-    // In Slip Mode on the active deck, duck the straight playback while the scratch head takes over,
-    // then seamlessly restore straight playback on the exact beat grid when the scratch finishes!
     if (this.playing && this.scratchSourceMode === "slip" && activeDeck.buffer && !this.busy) {
       activeDeck.out.gain.cancelScheduledValues(startAt);
       activeDeck.out.gain.setValueAtTime(1, Math.max(now, startAt - 0.005));
@@ -400,7 +606,6 @@ export class Mixer {
       this.manualScratch.playheadSec + clampedVel * 0.018
     );
 
-    // Shift scope history
     this.manualScratch.curveSamples.copyWithin(0, 1);
     this.manualScratch.curveSamples[127] = Math.max(-1.5, Math.min(1.5, this.manualScratch.displacement));
 
@@ -482,8 +687,8 @@ export class Mixer {
     if (now < s.startAt) {
       return {
         active: true,
-        patternId: s.patternId,
-        patternName: `${s.patternName} (Quantizing…)`,
+        patternId: s.patternId === "agent" ? null : s.patternId,
+        patternName: `${s.patternName} (Quantizing)`,
         deck: s.deck,
         progress: 0,
         velocity: 1,
@@ -498,6 +703,28 @@ export class Mixer {
     const elapsed = now - s.startAt;
     const duration = Math.max(0.01, s.endAt - s.startAt);
     const progress = Math.max(0, Math.min(1, elapsed / duration));
+    const scopeIdx = Math.min(127, Math.floor(progress * 128));
+
+    if (s.patternId === "agent") {
+      const disp = s.curveSamples[scopeIdx] ?? 0;
+      const g = s.gateSamples[scopeIdx] ?? 1;
+      const prevDisp = s.curveSamples[Math.max(0, scopeIdx - 1)] ?? 0;
+      const vel = Math.max(-2.8, Math.min(2.8, (disp - prevDisp) * 14 + (g > 0.2 ? 1.1 : -0.9)));
+      return {
+        active: true,
+        patternId: null,
+        patternName: s.patternName,
+        deck: s.deck,
+        progress,
+        velocity: vel,
+        displacement: disp,
+        faderOpen: g > 0.25,
+        faderGain: g,
+        curveSamples: s.curveSamples,
+        gateSamples: s.gateSamples,
+      };
+    }
+
     const beatPos = elapsed / s.secPerBeat;
     const { velocity, faderGain } = evaluateScratchTrajectory(
       s.patternId,
@@ -505,7 +732,6 @@ export class Mixer {
       s.totalBeats,
       this.scratchIntensity
     );
-    const scopeIdx = Math.min(127, Math.floor(progress * 128));
     const displacement = s.curveSamples[scopeIdx] ?? 0;
 
     return {
